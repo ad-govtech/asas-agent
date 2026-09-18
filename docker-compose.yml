@@ -1,0 +1,25 @@
+# Postgres for the agent registry. Bring it up, then `asas-agent migrate`.
+#
+# Langfuse is not here on purpose: use Langfuse Cloud keys, or run the official
+# self-hosted stack from https://langfuse.com/self-hosting alongside this.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: asas-agent-postgres
+    environment:
+      POSTGRES_USER: asas
+      POSTGRES_PASSWORD: asas
+      POSTGRES_DB: asas_agent
+    ports:
+      - "5433:5432"
+    volumes:
+      - asas-agent-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asas -d asas_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  asas-agent-data:

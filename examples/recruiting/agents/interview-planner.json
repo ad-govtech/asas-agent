@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "name": "Interview planner",
+  "description": "Turns a screening into an interview plan the panel can run.",
+  "prompt": {
+    "name": "agents/interview-planner",
+    "label": "production"
+  },
+  "model": {
+    "provider": "openai",
+    "name": "gpt-5-nano",
+    "settings": {}
+  },
+  "tools": [
+    "candidate.history"
+  ],
+  "sub_agents": [],
+  "runtime": {
+    "max_turns": 4,
+    "timeout_seconds": 30
+  },
+  "output": {
+    "schema": "interview_plan_v1"
+  },
+  "guardrails": []
+}

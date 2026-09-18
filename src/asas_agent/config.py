@@ -1,0 +1,82 @@
+"""Runtime settings, read from the environment once per process."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+Environment = Literal["dev", "test", "staging", "production"]
+
+
+def normalize_dsn(dsn: str) -> str:
+    """Accept the connection strings hosts hand out, return one asyncpg understands.
+
+    Neon, Vercel and psql all print `postgres://…?sslmode=require`; asyncpg wants
+    `postgresql+asyncpg://…` and rejects libpq-only query parameters.
+    """
+    if not dsn:
+        return dsn
+
+    url, _, query = dsn.partition("?")
+
+    for prefix, replacement in (
+        ("postgresql+asyncpg://", "postgresql+asyncpg://"),
+        ("postgresql://", "postgresql+asyncpg://"),
+        ("postgres://", "postgresql+asyncpg://"),
+    ):
+        if url.startswith(prefix):
+            url = replacement + url[len(prefix) :]
+            break
+
+    keep = [p for p in query.split("&") if p and not p.startswith(("sslmode=", "channel_binding=", "options="))]
+    if "sslmode=require" in query and "ssl=" not in query:
+        keep.append("ssl=require")
+
+    return f"{url}?{'&'.join(keep)}" if keep else url
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    # Agent registry
+    database_url: str = Field(default="", alias="DATABASE_URL")
+    environment: Environment = Field(default="dev", alias="ASAS_ENVIRONMENT")
+
+    # Runtime API
+    api_key: str = Field(default="", alias="ASAS_API_KEY")
+    host: str = Field(default="0.0.0.0", alias="ASAS_HOST")
+    port: int = Field(default=8080, alias="ASAS_PORT")
+
+    # Prompts: langfuse in every shared environment, files only for local work
+    prompt_provider: Literal["langfuse", "file"] = Field(default="langfuse", alias="ASAS_PROMPT_PROVIDER")
+    prompt_dir: str = Field(default="prompts", alias="ASAS_PROMPT_DIR")
+    langfuse_public_key: str = Field(default="", alias="LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key: str = Field(default="", alias="LANGFUSE_SECRET_KEY")
+    langfuse_host: str = Field(default="https://cloud.langfuse.com", alias="LANGFUSE_HOST")
+    tracing_enabled: bool = Field(default=True, alias="ASAS_TRACING")
+
+    # Models
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    gateway_base_url: str = Field(default="", alias="MODEL_GATEWAY_URL")
+    gateway_api_key: str = Field(default="", alias="MODEL_GATEWAY_KEY")
+
+    # Limits applied on top of whatever a definition asks for
+    max_turns_ceiling: int = Field(default=20, alias="ASAS_MAX_TURNS_CEILING")
+    timeout_ceiling_seconds: int = Field(default=300, alias="ASAS_TIMEOUT_CEILING")
+
+    @field_validator("database_url")
+    @classmethod
+    def _normalize(cls, value: str) -> str:
+        return normalize_dsn(value)
+
+    @property
+    def langfuse_configured(self) -> bool:
+        return bool(self.langfuse_public_key and self.langfuse_secret_key)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
