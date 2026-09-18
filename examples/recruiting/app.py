@@ -113,7 +113,7 @@ async def options() -> dict[str, Any]:
         "output_schemas": output_registry.keys(),
         "environment": ENVIRONMENT,
         "model_key_set": bool(_platform.settings.openai_api_key or _platform.settings.gateway_api_key),
-        "tracing": _platform.settings.langfuse_configured,
+        "tracing": _platform.settings.tracing_enabled and _platform.settings.tracing_provider == "langfuse",
     }
 
 

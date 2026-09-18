@@ -25,9 +25,14 @@ class PromptRef(BaseModel):
     version: int | None = None
     label: str | None = None
     variables: dict[str, Any] = Field(default_factory=dict)
+    snapshot: str | None = None
 
     @model_validator(mode="after")
     def _one_selector(self) -> PromptRef:
+        if self.snapshot is not None:
+            if self.version is not None or self.label is not None or self.variables:
+                raise ValueError("A rendered prompt snapshot cannot have a version, label, or variables")
+            return self
         if self.version is None and self.label is None:
             self.label = "production"
         if self.version is not None and self.label is not None:

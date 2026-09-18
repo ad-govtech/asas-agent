@@ -34,7 +34,7 @@ class AgentRuntime:
         business_context: dict[str, Any] | None = None,
         context: RuntimeContext,
     ) -> AgentRunResult:
-        from agents import Runner
+        from agents import RunConfig, Runner
 
         built = await self.factory.build(agent_key=agent_key, environment=environment, context=context)
 
@@ -50,6 +50,7 @@ class AgentRuntime:
                 input=json.dumps(payload, ensure_ascii=False, default=str),
                 context=context,
                 max_turns=max_turns,
+                run_config=RunConfig(tracing_disabled=self._tracer is None),
             )
 
         return AgentRunResult(

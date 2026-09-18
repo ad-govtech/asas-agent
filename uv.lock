@@ -62,7 +62,6 @@ dependencies = [
     { name = "asyncpg" },
     { name = "fastapi" },
     { name = "httpx" },
-    { name = "langfuse" },
     { name = "openai-agents" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -77,7 +76,11 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
+langfuse = [
+    { name = "langfuse" },
+]
 tracing = [
+    { name = "langfuse" },
     { name = "openinference-instrumentation-openai-agents" },
 ]
 
@@ -87,7 +90,8 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.30,<0.32" },
     { name = "fastapi", specifier = ">=0.128,<0.129" },
     { name = "httpx", specifier = ">=0.28,<0.29" },
-    { name = "langfuse", specifier = ">=3.7,<4" },
+    { name = "langfuse", marker = "extra == 'langfuse'", specifier = ">=3.7,<4" },
+    { name = "langfuse", marker = "extra == 'tracing'", specifier = ">=3.7,<4" },
     { name = "openai-agents", specifier = ">=0.8,<0.9" },
     { name = "openinference-instrumentation-openai-agents", marker = "extra == 'tracing'", specifier = ">=0.1.20" },
     { name = "pydantic", specifier = ">=2.11,<3" },
@@ -99,7 +103,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.15,<1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.39,<0.40" },
 ]
-provides-extras = ["tracing", "dev"]
+provides-extras = ["langfuse", "tracing", "dev"]
 
 [[package]]
 name = "asyncpg"

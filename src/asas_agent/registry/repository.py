@@ -17,6 +17,8 @@ from sqlalchemy import func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from asas_agent.integrations.prompts import PromptProvider, pin_prompt
+
 from .db import agent_definitions, agent_environment_bindings
 from .schema import AgentConfig, Environment
 
@@ -49,8 +51,9 @@ class AgentDefinition:
 
 
 class AgentRepository:
-    def __init__(self, session_factory: async_sessionmaker):
+    def __init__(self, session_factory: async_sessionmaker, *, prompts: PromptProvider | None = None):
         self._session_factory = session_factory
+        self._prompts = prompts
 
     async def create_draft(self, *, agent_key: str, config: AgentConfig, created_by: str) -> AgentDefinition:
         """Add the next version of an agent as a draft."""
@@ -110,14 +113,16 @@ class AgentRepository:
         version: int,
         pinned_config: AgentConfig | None = None,
     ) -> AgentDefinition:
-        """Lock a draft. `pinned_config` lets the caller store a resolved prompt version."""
+        """Lock a draft, resolving its prompt for every publication entry point."""
         async with self._session_factory() as session, session.begin():
             row = (
                 await session.execute(
-                    select(agent_definitions).where(
+                    select(agent_definitions)
+                    .where(
                         agent_definitions.c.agent_key == agent_key,
                         agent_definitions.c.version == version,
                     )
+                    .with_for_update()
                 )
             ).one_or_none()
 
@@ -128,9 +133,15 @@ class AgentRepository:
             if row.status == "archived":
                 raise RegistryError(f"{agent_key} v{version} is archived and cannot be published")
 
-            values: dict[str, Any] = {"status": "published", "published_at": func.now()}
-            if pinned_config is not None:
-                values["config"] = pinned_config.model_dump(mode="json", by_alias=True)
+            config = AgentConfig.model_validate(
+                pinned_config.model_dump(by_alias=True) if pinned_config is not None else row.config
+            )
+            config.prompt = await pin_prompt(config.prompt, self._prompts)
+            values: dict[str, Any] = {
+                "status": "published",
+                "published_at": func.now(),
+                "config": config.model_dump(mode="json", by_alias=True),
+            }
 
             updated = (
                 await session.execute(

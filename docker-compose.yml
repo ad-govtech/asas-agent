@@ -1,7 +1,7 @@
 # Postgres for the agent registry. Bring it up, then `asas-agent migrate`.
 #
-# Langfuse is not here on purpose: use Langfuse Cloud keys, or run the official
-# self-hosted stack from https://langfuse.com/self-hosting alongside this.
+# Langfuse is optional. File prompts need only this Postgres instance.
+# To use Langfuse, point LANGFUSE_HOST at your self-hosted instance or Cloud.
 
 services:
   postgres:
