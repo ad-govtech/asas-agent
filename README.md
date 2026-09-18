@@ -114,6 +114,12 @@ Install the `tracing` extra for span-level Langfuse traces of every model and to
 uv add "asas-agent[tracing]"
 ```
 
+## The thinking behind it
+
+- [The engineering guideline](docs/agent-as-configuration-guideline.md) this package was built to: the architecture, the design principles, the data model and the rules a governed agent platform follows.
+- [Design notes](docs/design.md): what this package implements, what it leaves to the calling application, and what is still open.
+- [Recruiting console](examples/recruiting/README.md): a working app that shows versions, tools and rollback in a browser.
+
 ## Development
 
 ```bash

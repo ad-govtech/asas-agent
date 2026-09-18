@@ -1,6 +1,6 @@
 # Design notes
 
-Built to the *Agent-as-Configuration Platform* engineering guideline (September 2026). This file records what the package implements, what it deliberately leaves to the calling application, and what is still open.
+Built to the [Agent-as-Configuration Platform engineering guideline](agent-as-configuration-guideline.md) (September 2026). This file records what the package implements, what it deliberately leaves to the calling application, and what is still open.
 
 ## The boundary
 
