@@ -9,6 +9,7 @@ The app registers its own capabilities and output schemas before calling this.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import import_module
 from typing import Any
 
 from asas_agent.config import Settings, get_settings
@@ -35,7 +36,10 @@ class Platform:
     runtime: AgentRuntime
 
     async def close(self) -> None:
-        await self.engine.dispose()
+        try:
+            await self.models.close()
+        finally:
+            await self.engine.dispose()
 
 
 def _build_tracer(settings: Settings):
@@ -65,6 +69,9 @@ def build_platform(
     require_prompts: bool = True,
 ) -> Platform:
     settings = settings or get_settings()
+    for module in settings.registration_modules.split(","):
+        if module.strip():
+            import_module(module.strip())
 
     try:
         prompts = build_prompt_provider(settings)
@@ -75,9 +82,8 @@ def build_platform(
 
     tracer = _build_tracer(settings)
     engine = create_engine(settings.database_url)
-    repository = AgentRepository(create_session_factory(engine), prompts=prompts)
-
     models = ModelRegistry(settings=settings)
+    repository = AgentRepository(create_session_factory(engine), prompts=prompts, models=models)
 
     factory = AgentFactory(
         repository=repository,
@@ -88,10 +94,13 @@ def build_platform(
         guardrails=guardrail_module.registry,
     )
 
-    runtime = AgentRuntime(factory, tracer=tracer)
-
-    if dependencies:
-        runtime.default_dependencies = dependencies  # type: ignore[attr-defined]
+    runtime = AgentRuntime(
+        factory,
+        tracer=tracer,
+        max_turns_ceiling=settings.max_turns_ceiling,
+        timeout_ceiling_seconds=settings.timeout_ceiling_seconds,
+        dependencies=dependencies,
+    )
 
     return Platform(
         settings=settings,

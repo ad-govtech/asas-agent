@@ -142,6 +142,7 @@ Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to t
 
 | Variable | Purpose |
 |---|---|
+| `ASAS_REGISTRATION_MODULES` | Comma-separated Python modules registering application tools, schemas, and guardrails before startup/publication |
 | `DATABASE_URL` | Postgres for the registry. `postgres://` and `?sslmode=require` are accepted |
 | `ASAS_API_KEY` | Required as `X-API-Key` on the runtime API when set |
 | `ASAS_PROMPT_PROVIDER` | `file` (default) or `langfuse` |
@@ -164,12 +165,39 @@ uv add "asas-agent[tracing]"
 - [Design notes](docs/design.md): what this package implements, what it leaves to the calling application, and what is still open.
 - [Recruiting console](examples/recruiting/README.md): a working app that shows versions, tools and rollback in a browser.
 
+## Publication and execution checks
+
+Publishing validates model capabilities/settings, registered tool/schema/guardrail names, and the sub-agent graph without executing tools or calling models. Promotion rechecks the graph because environment bindings may have changed. Register application components before calling `build_platform()`. For CLI usage, set `ASAS_REGISTRATION_MODULES`, for example `examples.recruiting.capabilities,examples.recruiting.schemas`. These are trusted application modules, never code from an agent definition.
+
+New model names require explicit capability metadata before publication and runtime use:
+
+```python
+from asas_agent.integrations.models import ModelCapabilities
+
+platform.models.capabilities["gateway:my-model"] = ModelCapabilities(
+    tool_calling=True, structured_output=True,
+)
+```
+
+`reasoning_effort` is translated to the SDK's `reasoning.effort`; unsupported settings are rejected. Model clients use the credentials from `Settings`, including `.env` values. The OpenAI client is constrained to the tested 2.29 series for compatibility with Agents SDK 0.8.
+
+Every runtime entry point applies the minimum of caller, definition, and platform limits. Deadlines include agent assembly and cancel pending async work. Tool sub-agents have their own bounded runs within the parent's deadline. Handoffs share one run and use the strictest limits in the handoff chain. `build_platform(dependencies=...)` supplies defaults to direct calls as well as HTTP requests; request dependencies override defaults without mutating them. HTTP deadline failures return 504 and exhausted turn budgets return 422.
+
 ## Development
 
 ```bash
 uv venv && uv pip install -e ".[dev]"
 uv run pytest
 uv run ruff check .
+node --test tests/recruiting-security.test.mjs
 ```
+
+The suite includes real SDK execution with a local model and mocked HTTP transport; it needs no model credentials. PostgreSQL concurrency and publication tests are opt-in locally and run in CI:
+
+```bash
+ASAS_TEST_DATABASE_URL=postgresql+asyncpg://asas:asas@localhost:5433/asas_agent uv run pytest tests/test_postgres.py
+```
+
+These database tests create and remove uniquely named schemas. Use a disposable development database. CI runs the Python suite, PostgreSQL tests, console security tests, and package build on Python 3.11 and 3.12.
 
 Part of the Abu Dhabi Government AI Factory Commons. Built by XD.AI.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -68,6 +69,9 @@ class LangfusePrompts:
     async def resolve(self, ref: PromptRef) -> ResolvedPrompt:
         if ref.snapshot is not None:
             return ResolvedPrompt(text=ref.snapshot, name=ref.name, version=None)
+        return await asyncio.to_thread(self._resolve, ref)
+
+    def _resolve(self, ref: PromptRef) -> ResolvedPrompt:
         client = self._get_client()
         try:
             if ref.version is not None:

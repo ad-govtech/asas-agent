@@ -14,6 +14,9 @@ from pathlib import Path
 from asas_agent import build_platform
 from asas_agent.registry.schema import AgentConfig
 
+from . import capabilities as _capabilities  # noqa: F401 - register before publication
+from . import schemas as _schemas  # noqa: F401 - register before publication
+
 AGENT_DIR = Path(__file__).parent / "agents"
 
 

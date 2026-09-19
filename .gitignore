@@ -10,3 +10,6 @@ dist/
 build/
 *.egg-info/
 prompts/local/
+
+# Browser automation logs and temporary session state
+.playwright-cli/

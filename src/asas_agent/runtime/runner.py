@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from dataclasses import dataclass
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from typing import Any
 
 from asas_agent.runtime.context import RuntimeContext
@@ -21,9 +23,20 @@ class AgentRunResult:
 
 
 class AgentRuntime:
-    def __init__(self, factory: AgentFactory, *, tracer=None):
+    def __init__(
+        self,
+        factory: AgentFactory,
+        *,
+        tracer=None,
+        max_turns_ceiling: int = 20,
+        timeout_ceiling_seconds: float = 300,
+        dependencies: dict[str, Any] | None = None,
+    ):
         self.factory = factory
         self._tracer = tracer
+        self.max_turns_ceiling = max_turns_ceiling
+        self.timeout_ceiling_seconds = timeout_ceiling_seconds
+        self.default_dependencies = dict(dependencies or {})
 
     async def run(
         self,
@@ -36,22 +49,35 @@ class AgentRuntime:
     ) -> AgentRunResult:
         from agents import RunConfig, Runner
 
-        built = await self.factory.build(agent_key=agent_key, environment=environment, context=context)
+        if context.max_turns < 1 or context.timeout_seconds <= 0:
+            raise ValueError("Runtime turn and timeout limits must be positive")
+        context = replace(
+            context,
+            environment=environment,
+            max_turns=min(context.max_turns, self.max_turns_ceiling),
+            timeout_seconds=min(context.timeout_seconds, self.timeout_ceiling_seconds),
+            dependencies={**self.default_dependencies, **context.dependencies},
+            trace_metadata=dict(context.trace_metadata),
+        )
+        started = asyncio.get_running_loop().time()
+        async with asyncio.timeout(context.timeout_seconds) as deadline:
+            built = await self.factory.build(agent_key=agent_key, environment=environment, context=context)
+            # Count assembly against the definition's deadline too.
+            if asyncio.get_running_loop().time() >= started + built.timeout_seconds:
+                raise TimeoutError("Agent assembly exceeded its execution deadline")
+            deadline.reschedule(started + built.timeout_seconds)
+            payload = {"request": user_input}
+            if business_context:
+                payload["context"] = business_context
 
-        payload = {"request": user_input}
-        if business_context:
-            payload["context"] = business_context
-
-        max_turns = min(context.max_turns, built.config.runtime.max_turns)
-
-        with self._trace(agent_key, context) as trace_id:
-            result = await Runner.run(
-                built.agent,
-                input=json.dumps(payload, ensure_ascii=False, default=str),
-                context=context,
-                max_turns=max_turns,
-                run_config=RunConfig(tracing_disabled=self._tracer is None),
-            )
+            async with self._trace(agent_key, context) as trace_id:
+                result = await Runner.run(
+                    built.agent,
+                    input=json.dumps(payload, ensure_ascii=False, default=str),
+                    context=context,
+                    max_turns=built.max_turns,
+                    run_config=RunConfig(tracing_disabled=self._tracer is None),
+                )
 
         return AgentRunResult(
             output=result.final_output,
@@ -62,17 +88,14 @@ class AgentRuntime:
             toolset=list(built.config.tools),
         )
 
-    def _trace(self, agent_key: str, context: RuntimeContext):
+    @asynccontextmanager
+    async def _trace(self, agent_key: str, context: RuntimeContext):
         """Open a Langfuse span when tracing is on; otherwise do nothing."""
-        from contextlib import contextmanager
-
         tracer = self._tracer
-
-        @contextmanager
-        def span():
-            if tracer is None:
-                yield None
-                return
+        if tracer is None:
+            yield None
+            return
+        try:
             with tracer.start_as_current_observation(name=f"agent:{agent_key}") as observation:
                 tracer.update_current_trace(
                     user_id=context.user_id,
@@ -80,9 +103,8 @@ class AgentRuntime:
                     metadata={**context.trace_metadata, "tenant_id": context.tenant_id},
                     tags=[f"env:{context.environment}", f"agent:{agent_key}"],
                 )
-                try:
-                    yield getattr(observation, "trace_id", None)
-                finally:
-                    tracer.flush()
-
-        return span()
+                yield getattr(observation, "trace_id", None)
+        finally:
+            # The SDK batches pending spans; never extend a cancelled run to flush.
+            if not asyncio.current_task().cancelling():
+                await asyncio.to_thread(tracer.flush)

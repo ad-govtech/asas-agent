@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import parse_qsl, urlencode
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,11 +32,17 @@ def normalize_dsn(dsn: str) -> str:
             url = replacement + url[len(prefix) :]
             break
 
-    keep = [p for p in query.split("&") if p and not p.startswith(("sslmode=", "channel_binding=", "options="))]
-    if "sslmode=require" in query and "ssl=" not in query:
-        keep.append("ssl=require")
-
-    return f"{url}?{'&'.join(keep)}" if keep else url
+    pairs = parse_qsl(query, keep_blank_values=True)
+    ssl_values = [value for key, value in pairs if key in {"ssl", "sslmode"}]
+    if len(set(ssl_values)) > 1:
+        raise ValueError("Conflicting ssl and sslmode values in DATABASE_URL")
+    keep = [(key, value) for key, value in pairs if key not in {"ssl", "sslmode", "channel_binding", "options"}]
+    if ssl_values:
+        mode = ssl_values[0]
+        if mode not in {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}:
+            raise ValueError(f"Unsupported PostgreSQL SSL mode: {mode!r}")
+        keep.append(("ssl", mode))
+    return f"{url}?{urlencode(keep)}" if keep else url
 
 
 class Settings(BaseSettings):
@@ -44,6 +51,7 @@ class Settings(BaseSettings):
     # Agent registry
     database_url: str = Field(default="", alias="DATABASE_URL")
     environment: Environment = Field(default="dev", alias="ASAS_ENVIRONMENT")
+    registration_modules: str = Field(default="", alias="ASAS_REGISTRATION_MODULES")
 
     # Runtime API
     api_key: str = Field(default="", alias="ASAS_API_KEY")
@@ -65,8 +73,8 @@ class Settings(BaseSettings):
     gateway_api_key: str = Field(default="", alias="MODEL_GATEWAY_KEY")
 
     # Limits applied on top of whatever a definition asks for
-    max_turns_ceiling: int = Field(default=20, alias="ASAS_MAX_TURNS_CEILING")
-    timeout_ceiling_seconds: int = Field(default=300, alias="ASAS_TIMEOUT_CEILING")
+    max_turns_ceiling: int = Field(default=20, ge=1, alias="ASAS_MAX_TURNS_CEILING")
+    timeout_ceiling_seconds: int = Field(default=300, ge=1, alias="ASAS_TIMEOUT_CEILING")
 
     @field_validator("database_url")
     @classmethod

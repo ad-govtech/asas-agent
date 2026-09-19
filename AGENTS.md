@@ -25,7 +25,7 @@ Target Python 3.11+, use four-space indentation, and follow existing type annota
 
 ## Testing Guidelines
 
-Use pytest and pytest-asyncio, with automatic asyncio mode. Name files `test_*.py` and functions `test_<behavior>`. Add regression tests for schema validation, capability authorization, and changed runtime behavior. Current tests need no live services; keep unit tests independent of model credentials. No coverage threshold is configured. Run a focused file with `uv run pytest tests/test_schema.py`.
+Use pytest and pytest-asyncio, with automatic asyncio mode. Name files `test_*.py` and functions `test_<behavior>`. Add regression tests for schema validation, capability authorization, and changed runtime behavior. Keep unit tests independent of model credentials. PostgreSQL tests use `ASAS_TEST_DATABASE_URL` and isolated schemas; CI runs them. Run console security checks with `node --test tests/recruiting-security.test.mjs`. No coverage threshold is configured. Run a focused file with `uv run pytest tests/test_schema.py`.
 
 ## Commit & Pull Request Guidelines
 

@@ -7,13 +7,14 @@ authenticated its user and loaded the context the agent needs.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from secrets import compare_digest
 from typing import Any
 
+from agents.exceptions import MaxTurnsExceeded
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from asas_agent.bootstrap import Platform, build_platform
-from asas_agent.config import get_settings
 from asas_agent.integrations.models import ModelError
 from asas_agent.integrations.prompts import PromptError
 from asas_agent.registry.capabilities import CapabilityError
@@ -72,8 +73,8 @@ def create_app(platform: Platform | None = None) -> FastAPI:
         return current
 
     async def authorize(x_api_key: str | None = Header(default=None)) -> None:
-        expected = get_settings().api_key
-        if expected and x_api_key != expected:
+        expected = get_platform().settings.api_key
+        if expected and not compare_digest((x_api_key or "").encode(), expected.encode()):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Send a valid X-API-Key header")
 
     @app.get("/healthz")
@@ -115,6 +116,10 @@ def create_app(platform: Platform | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (PromptError, ModelError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="The agent exceeded its execution deadline") from exc
+        except MaxTurnsExceeded as exc:
+            raise HTTPException(status_code=422, detail="The agent exceeded its turn limit") from exc
 
         return AgentRunResponse(
             output=result.output,

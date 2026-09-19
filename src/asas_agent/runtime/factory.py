@@ -7,6 +7,7 @@ what it resolved so the trace can be reproduced.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,6 +31,19 @@ class BuiltAgent:
     agent_version: int
     prompt_version: int | None
     config: AgentConfig
+    max_turns: int
+    timeout_seconds: float
+
+
+def _bounded_tool(tool, timeout_seconds: float):
+    invoke = tool.on_invoke_tool
+
+    async def bounded(context, arguments):
+        async with asyncio.timeout(timeout_seconds):
+            return await invoke(context, arguments)
+
+    tool.on_invoke_tool = bounded
+    return tool
 
 
 class AgentFactory:
@@ -66,71 +80,87 @@ class AgentFactory:
             raise CyclicAgentError(f"Sub-agents form a loop at {node}")
         visited.add(node)
 
+        started = asyncio.get_running_loop().time()
         definition = await self.repository.get_active(agent_key=agent_key, environment=environment)
         config = definition.config
 
-        resolved_prompt = await self.prompts.resolve(config.prompt)
-        model = self.models.resolve(config.model.provider, config.model.name)
-        capability = self.models.capability(config.model.provider, config.model.name)
+        async with asyncio.timeout_at(started + min(context.timeout_seconds, config.runtime.timeout_seconds)):
+            resolved_prompt = await self.prompts.resolve(config.prompt)
+            model = self.models.resolve(config.model.provider, config.model.name)
+            capability = self.models.capability(config.model.provider, config.model.name)
 
-        if config.tools and not capability.tool_calling:
-            raise ModelError(f"{config.model.provider}:{config.model.name} cannot call tools, but tools are configured")
-        if config.output.schema_key and not capability.structured_output:
-            raise ModelError(
-                f"{config.model.provider}:{config.model.name} cannot return structured output, "
-                f"but the schema {config.output.schema_key!r} is configured"
-            )
-
-        tools = self.capabilities.resolve_many(config.tools, context)
-        handoffs = []
-
-        for ref in config.sub_agents:
-            built = await self.build(
-                agent_key=ref.agent_key,
-                environment=ref.environment,
-                context=context,
-                visited=set(visited),
-            )
-            if ref.mode == "tool":
-                tools.append(
-                    built.agent.as_tool(
-                        tool_name=ref.tool_name or ref.agent_key.replace("-", "_"),
-                        tool_description=ref.description or f"Ask the {ref.agent_key} specialist.",
-                    )
+            if (config.tools or config.sub_agents) and not capability.tool_calling:
+                raise ModelError(
+                    f"{config.model.provider}:{config.model.name} cannot call tools, but tools are configured"
                 )
-            else:
-                handoffs.append(built.agent)
+            if config.output.schema_key and not capability.structured_output:
+                raise ModelError(
+                    f"{config.model.provider}:{config.model.name} cannot return structured output, "
+                    f"but the schema {config.output.schema_key!r} is configured"
+                )
 
-        guardrails = self.guardrails.resolve_many(config.guardrails)
+            tools = self.capabilities.resolve_many(config.tools, context)
+            handoffs = []
+            max_turns = min(context.max_turns, config.runtime.max_turns)
+            timeout_seconds = min(context.timeout_seconds, config.runtime.timeout_seconds)
 
-        context.trace_metadata.update(
-            {
-                "agent_key": agent_key,
-                "agent_version": definition.version,
-                "environment": environment,
-                "prompt_name": resolved_prompt.name,
-                "prompt_version": resolved_prompt.version,
-                "model_provider": config.model.provider,
-                "model_name": config.model.name,
-                "toolset": list(config.tools),
-            }
-        )
+            for ref in config.sub_agents:
+                built = await self.build(
+                    agent_key=ref.agent_key,
+                    environment=ref.environment,
+                    context=context,
+                    visited=set(visited),
+                )
+                if ref.mode == "tool":
+                    tools.append(
+                        _bounded_tool(
+                            built.agent.as_tool(
+                                tool_name=ref.tool_name or ref.agent_key.replace("-", "_"),
+                                tool_description=ref.description or f"Ask the {ref.agent_key} specialist.",
+                                max_turns=built.max_turns,
+                                failure_error_function=None,
+                            ),
+                            built.timeout_seconds,
+                        )
+                    )
+                else:
+                    handoffs.append(built.agent)
+                    # Handoffs share one SDK run, so use the strictest chain budget.
+                    max_turns = min(max_turns, built.max_turns)
+                    timeout_seconds = min(timeout_seconds, built.timeout_seconds)
 
-        agent = Agent(
-            name=config.name,
-            instructions=resolved_prompt.text,
-            model=model,
-            model_settings=ModelSettings(**self.models.validated_settings(config.model.settings)),
-            tools=tools,
-            handoffs=handoffs,
-            output_type=self.outputs.resolve(config.output.schema_key),
-            input_guardrails=guardrails.input,
-            output_guardrails=guardrails.output,
-        )
+            guardrails = self.guardrails.resolve_many(config.guardrails)
 
-        return BuiltAgent(
-            agent=agent,
-            agent_version=definition.version,
-            prompt_version=resolved_prompt.version,
-            config=config,
-        )
+            context.trace_metadata.update(
+                {
+                    "agent_key": agent_key,
+                    "agent_version": definition.version,
+                    "environment": environment,
+                    "prompt_name": resolved_prompt.name,
+                    "prompt_version": resolved_prompt.version,
+                    "model_provider": config.model.provider,
+                    "model_name": config.model.name,
+                    "toolset": list(config.tools),
+                }
+            )
+
+            agent = Agent(
+                name=config.name,
+                instructions=resolved_prompt.text,
+                model=model,
+                model_settings=ModelSettings(**self.models.validated_settings(config.model.settings)),
+                tools=tools,
+                handoffs=handoffs,
+                output_type=self.outputs.resolve(config.output.schema_key),
+                input_guardrails=guardrails.input,
+                output_guardrails=guardrails.output,
+            )
+
+            return BuiltAgent(
+                agent=agent,
+                agent_version=definition.version,
+                prompt_version=resolved_prompt.version,
+                config=config,
+                max_turns=max_turns,
+                timeout_seconds=timeout_seconds,
+            )
