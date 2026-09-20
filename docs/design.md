@@ -24,7 +24,9 @@ The runtime holds no business state and no session. Anything durable lives in Po
 | Version model | Immutable rows, one binding per environment | Promotion and rollback move a pointer; a published version never changes |
 | Validation | Pydantic, on save, on publish, and again on load | Bad configuration never reaches a model call |
 | Prompts | File drafts with registry snapshots, or optional Langfuse | Developers choose whether to operate a separate prompt service |
-| Prompt pinning | Publishing stores rendered file text or pins a Langfuse version | `customer-advisor v2` always means the same thing |
+| Prompt pinning | Publishing stores the file template or pins a Langfuse version | `customer-advisor v2` always means the same thing |
+| Prompt shape | Text or chat; system messages instruct, the rest open the run | The prompt author places each fact, instead of the runtime handing the model one JSON blob |
+| Prompt variables | The definition's values publish with the agent; the request's arrive per call | A request's data cannot be frozen into a version; substitution happens once |
 | Tools | Named in configuration, implemented in the app | The database never carries code, URLs or credentials |
 | Action tools | Refused unless the caller enables them | An LLM naming a tool is not authorization |
 | Models | Registry of providers, with a capability table | A model that cannot call tools is refused at publish, not mid-run |
@@ -56,7 +58,7 @@ The runtime holds no business state and no session. Anything durable lives in Po
 
 ## Optional Langfuse
 
-The original engineering guideline uses Langfuse as its reference deployment. This implementation also supports file prompts in shared environments: publication stores rendered text in the existing agent-definition JSONB, so no database migration or extra service is needed. The agent version identifies the snapshot. All publication paths use the repository's pinning logic; missing prompts prevent publication.
+The original engineering guideline uses Langfuse as its reference deployment. This implementation also supports file prompts in shared environments: publication stores the prompt template, placeholders included, in the existing agent-definition JSONB, so no database migration or extra service is needed. The agent version identifies the snapshot. All publication paths use the repository's pinning logic; missing prompts prevent publication.
 
 Langfuse remains available through the `langfuse` extra (or `tracing` for span instrumentation). `LANGFUSE_HOST` selects a self-hosted/internal instance or Cloud, using that instance's project keys. `ASAS_TRACING_PROVIDER` chooses `none` or `langfuse` independently of `ASAS_PROMPT_PROVIDER`. See the README for deployment and migration settings.
 

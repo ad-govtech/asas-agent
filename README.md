@@ -86,7 +86,38 @@ asas-agent agent promote customer-advisor 1 --env production            # rolled
 asas-agent agent list customer-advisor
 ```
 
-Publishing freezes the prompt: file prompts are rendered and stored in the agent definition; Langfuse labels such as `production` are resolved to an exact version. Editing a file does not change published agents. Create and publish a new agent version to adopt the edit. File snapshots travel with promotion and rollback, and runtime servers do not need the original files.
+Publishing freezes the prompt: file prompts are stored in the agent definition as they are written, placeholders included; Langfuse labels such as `production` are resolved to an exact version. Editing a file does not change published agents. Create and publish a new agent version to adopt the edit. File snapshots travel with promotion and rollback, and runtime servers do not need the original files.
+
+## Chat prompts and variables
+
+A prompt is either one block of text or a chat prompt: an ordered list of role-tagged messages.
+
+```json
+[
+  {"role": "system", "content": "You screen applications for {{entity}}."},
+  {"role": "user", "content": "Application: {{application}}"}
+]
+```
+
+System and developer messages become the agent's instructions. User and assistant messages open the run, so a prompt author decides where each fact lands instead of receiving one JSON blob.
+
+Placeholders are filled from two places, with the request winning a tie:
+
+- `prompt.variables` in the agent definition, for values that are part of the published agent;
+- `prompt_variables` on the request, for values that belong to this call.
+
+```python
+result = await platform.runtime.run(
+    agent_key="screening-assistant",
+    environment="production",
+    prompt_variables={"application": application.to_ai_view()},
+    context=RuntimeContext(tenant_id="T001", user_id="U812", correlation_id="REQ-09F4"),
+)
+```
+
+The same values can be sent to the runtime API as `prompt_variables`, or from the CLI with `--var name=value`.
+
+A placeholder with no value is an error: the model is never handed a literal `{{application}}` to read. Values are substituted once, so a value that itself contains `{{...}}` is left alone. `user_input` and `context` still work with a chat prompt and arrive as a JSON message after the prompt's own, but only when the caller sends them.
 
 ## Rules the package enforces
 
@@ -96,6 +127,8 @@ Publishing freezes the prompt: file prompts are rendered and stored in the agent
 - A model that cannot call tools or return structured output is refused at publish time, not mid-conversation.
 - Sub-agents that reference each other in a loop are refused.
 - A missing production prompt is an error. The runtime never falls back to a draft.
+- A prompt variable with no value is an error, not a placeholder left in the text.
+- A chat prompt with no system message is refused: an agent without instructions is a bug.
 
 ## Choose prompts and tracing
 
@@ -114,7 +147,7 @@ ASAS_PROMPT_DIR=prompts
 ASAS_TRACING_PROVIDER=none
 ```
 
-A prompt named `agents/customer-advisor` reads `prompts/agents/customer-advisor.md`. Variables such as `{{department}}` are substituted from the definition's `prompt.variables` before publication. File prompts do not support numeric versions or custom labels; the agent version identifies the stored snapshot (`prompt_version` is null).
+A prompt named `agents/customer-advisor` reads `prompts/agents/customer-advisor.md` as a text prompt, or `prompts/agents/customer-advisor.chat.json` as a chat prompt. File prompts do not support numeric versions or custom labels; the agent version identifies the stored snapshot (`prompt_version` is null).
 
 For Langfuse, install the optional dependency:
 

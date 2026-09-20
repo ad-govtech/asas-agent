@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from asas_agent.integrations.models import ModelError, ModelRegistry
-from asas_agent.integrations.prompts import PromptProvider
+from asas_agent.integrations.prompts import PromptMessage, PromptProvider
 from asas_agent.registry.capabilities import CapabilityRegistry
 from asas_agent.registry.guardrails import GuardrailRegistry
 from asas_agent.registry.outputs import OutputSchemaRegistry
@@ -33,6 +33,8 @@ class BuiltAgent:
     config: AgentConfig
     max_turns: int
     timeout_seconds: float
+    #: The user and assistant messages of a chat prompt, which open the run.
+    prompt_messages: tuple[PromptMessage, ...] = ()
 
 
 def _bounded_tool(tool, timeout_seconds: float):
@@ -70,6 +72,7 @@ class AgentFactory:
         agent_key: str,
         environment: str,
         context: RuntimeContext,
+        prompt_variables: dict[str, Any] | None = None,
         visited: set[str] | None = None,
     ) -> BuiltAgent:
         from agents import Agent, ModelSettings
@@ -85,7 +88,7 @@ class AgentFactory:
         config = definition.config
 
         async with asyncio.timeout_at(started + min(context.timeout_seconds, config.runtime.timeout_seconds)):
-            resolved_prompt = await self.prompts.resolve(config.prompt)
+            resolved_prompt = await self.prompts.resolve(config.prompt, prompt_variables)
             model = self.models.resolve(config.model.provider, config.model.name)
             capability = self.models.capability(config.model.provider, config.model.name)
 
@@ -146,7 +149,7 @@ class AgentFactory:
 
             agent = Agent(
                 name=config.name,
-                instructions=resolved_prompt.text,
+                instructions=resolved_prompt.instructions,
                 model=model,
                 model_settings=ModelSettings(**self.models.validated_settings(config.model.settings)),
                 tools=tools,
@@ -163,4 +166,5 @@ class AgentFactory:
                 config=config,
                 max_turns=max_turns,
                 timeout_seconds=timeout_seconds,
+                prompt_messages=resolved_prompt.messages,
             )

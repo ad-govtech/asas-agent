@@ -8,8 +8,39 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any
 
+from asas_agent.integrations.prompts import PromptMessage
 from asas_agent.runtime.context import RuntimeContext
 from asas_agent.runtime.factory import AgentFactory
+
+
+def _payload(user_input: str, business_context: dict[str, Any] | None) -> dict[str, Any]:
+    payload: dict[str, Any] = {"request": user_input}
+    if business_context:
+        payload["context"] = business_context
+    return payload
+
+
+def _run_input(
+    prompt_messages: tuple[PromptMessage, ...],
+    user_input: str,
+    business_context: dict[str, Any] | None,
+) -> Any:
+    """What the run starts from.
+
+    A text prompt keeps the original contract: one JSON message holding the
+    request and the context the calling service loaded. A chat prompt sends its
+    own messages first, because the prompt author decided where each fact goes,
+    and the JSON message follows only when the caller passed something.
+    """
+    payload = _payload(user_input, business_context)
+
+    if not prompt_messages:
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+    items: list[dict[str, str]] = [{"role": m.role, "content": m.content} for m in prompt_messages]
+    if user_input or business_context:
+        items.append({"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)})
+    return items
 
 
 @dataclass
@@ -43,8 +74,9 @@ class AgentRuntime:
         *,
         agent_key: str,
         environment: str,
-        user_input: str,
+        user_input: str = "",
         business_context: dict[str, Any] | None = None,
+        prompt_variables: dict[str, Any] | None = None,
         context: RuntimeContext,
     ) -> AgentRunResult:
         from agents import RunConfig, Runner
@@ -61,19 +93,21 @@ class AgentRuntime:
         )
         started = asyncio.get_running_loop().time()
         async with asyncio.timeout(context.timeout_seconds) as deadline:
-            built = await self.factory.build(agent_key=agent_key, environment=environment, context=context)
+            built = await self.factory.build(
+                agent_key=agent_key,
+                environment=environment,
+                context=context,
+                prompt_variables=prompt_variables,
+            )
             # Count assembly against the definition's deadline too.
             if asyncio.get_running_loop().time() >= started + built.timeout_seconds:
                 raise TimeoutError("Agent assembly exceeded its execution deadline")
             deadline.reschedule(started + built.timeout_seconds)
-            payload = {"request": user_input}
-            if business_context:
-                payload["context"] = business_context
 
             async with self._trace(agent_key, context) as trace_id:
                 result = await Runner.run(
                     built.agent,
-                    input=json.dumps(payload, ensure_ascii=False, default=str),
+                    input=_run_input(built.prompt_messages, user_input, business_context),
                     context=context,
                     max_turns=built.max_turns,
                     run_config=RunConfig(tracing_disabled=self._tracer is None),
