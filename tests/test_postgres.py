@@ -116,3 +116,53 @@ async def test_promotion_revalidates_graph_after_publication(repository):
     with pytest.raises(DefinitionError, match="loop"):
         await repository.bind(agent_key="b", version=b2, environment="dev", updated_by="test")
     assert (await repository.get_active(agent_key="b", environment="dev")).version == 1
+
+
+async def test_one_agent_in_two_environments_is_not_a_loop(repository):
+    """`advisor:production -> reviewer:production -> advisor:staging` ends at a different binding."""
+    leaf = await release(repository, "advisor", promote=False)
+    await repository.bind(agent_key="advisor", version=leaf, environment="staging", updated_by="test")
+
+    reviewer = await release(
+        repository,
+        "reviewer",
+        config(sub_agents=[{"agent_key": "advisor", "environment": "staging", "mode": "tool"}]),
+        promote=False,
+    )
+    await repository.bind(agent_key="reviewer", version=reviewer, environment="production", updated_by="test")
+
+    advisor2 = await release(
+        repository,
+        "advisor",
+        config(sub_agents=[{"agent_key": "reviewer", "environment": "production", "mode": "tool"}]),
+        promote=False,
+    )
+    await repository.bind(agent_key="advisor", version=advisor2, environment="production", updated_by="test")
+
+    assert (await repository.get_active(agent_key="advisor", environment="production")).version == advisor2
+    assert (await repository.get_active(agent_key="advisor", environment="staging")).version == leaf
+
+
+async def test_a_loop_that_runs_through_another_environment_is_still_a_loop(repository):
+    """`advisor:staging -> reviewer:production -> advisor:staging` never ends."""
+    leaf = await release(repository, "advisor", promote=False)
+    await repository.bind(agent_key="advisor", version=leaf, environment="staging", updated_by="test")
+
+    reviewer = await release(
+        repository,
+        "reviewer",
+        config(sub_agents=[{"agent_key": "advisor", "environment": "staging", "mode": "tool"}]),
+        promote=False,
+    )
+    await repository.bind(agent_key="reviewer", version=reviewer, environment="production", updated_by="test")
+
+    advisor2 = await release(
+        repository,
+        "advisor",
+        config(sub_agents=[{"agent_key": "reviewer", "environment": "production", "mode": "tool"}]),
+        promote=False,
+    )
+    with pytest.raises(DefinitionError, match="loop at advisor:staging"):
+        await repository.bind(agent_key="advisor", version=advisor2, environment="staging", updated_by="test")
+
+    assert (await repository.get_active(agent_key="advisor", environment="staging")).version == leaf
