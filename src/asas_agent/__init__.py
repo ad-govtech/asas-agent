@@ -2,7 +2,7 @@
 
 An agent is a versioned row in Postgres: a prompt reference, a model, the tools
 it may use and the limits it runs under. This package resolves that definition
-and runs it on the OpenAI Agents SDK, with prompts and traces in Langfuse.
+and runs it on the OpenAI Agents SDK, with file prompts or optional Langfuse.
 """
 
 from asas_agent.bootstrap import Platform, build_platform, build_runtime

@@ -13,7 +13,7 @@ from typing import Any
 
 from asas_agent.config import Settings, get_settings
 from asas_agent.integrations.models import ModelRegistry
-from asas_agent.integrations.prompts import PromptProvider, build_prompt_provider
+from asas_agent.integrations.prompts import PromptError, PromptProvider, build_prompt_provider, langfuse_client
 from asas_agent.registry import capabilities as capability_module
 from asas_agent.registry import guardrails as guardrail_module
 from asas_agent.registry import outputs as output_module
@@ -30,7 +30,7 @@ class Platform:
     settings: Settings
     engine: Any
     repository: AgentRepository
-    prompts: PromptProvider
+    prompts: PromptProvider | None
     models: ModelRegistry
     runtime: AgentRuntime
 
@@ -39,19 +39,21 @@ class Platform:
 
 
 def _build_tracer(settings: Settings):
-    if not (settings.tracing_enabled and settings.langfuse_configured):
+    if not settings.tracing_enabled or settings.tracing_provider == "none":
         return None
 
-    from langfuse import get_client
-
-    client = get_client()
+    client = langfuse_client(settings)
 
     try:  # Traces every model and tool call the Agents SDK makes.
         from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 
-        OpenAIAgentsInstrumentor().instrument()
+        OpenAIAgentsInstrumentor().instrument(exclusive_processor=True)
     except ImportError:
-        pass  # Install the `tracing` extra for span-level detail.
+        # Without span instrumentation, keep only our Langfuse run observation.
+        # Selecting an internal trace backend must not enable OpenAI's exporter.
+        from agents import set_trace_processors
+
+        set_trace_processors([])
 
     return client
 
@@ -64,15 +66,16 @@ def build_platform(
 ) -> Platform:
     settings = settings or get_settings()
 
-    engine = create_engine(settings.database_url)
-    repository = AgentRepository(create_session_factory(engine))
-
     try:
         prompts = build_prompt_provider(settings)
-    except Exception:
+    except PromptError:
         if require_prompts:
             raise
         prompts = None  # `doctor` reports the problem instead of failing to start
+
+    tracer = _build_tracer(settings)
+    engine = create_engine(settings.database_url)
+    repository = AgentRepository(create_session_factory(engine), prompts=prompts)
 
     models = ModelRegistry(settings=settings)
 
@@ -85,7 +88,7 @@ def build_platform(
         guardrails=guardrail_module.registry,
     )
 
-    runtime = AgentRuntime(factory, tracer=_build_tracer(settings))
+    runtime = AgentRuntime(factory, tracer=tracer)
 
     if dependencies:
         runtime.default_dependencies = dependencies  # type: ignore[attr-defined]

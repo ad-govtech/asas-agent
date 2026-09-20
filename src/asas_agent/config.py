@@ -50,13 +50,14 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", alias="ASAS_HOST")
     port: int = Field(default=8080, alias="ASAS_PORT")
 
-    # Prompts: langfuse in every shared environment, files only for local work
-    prompt_provider: Literal["langfuse", "file"] = Field(default="langfuse", alias="ASAS_PROMPT_PROVIDER")
+    # Files need no separate service; publishing snapshots their text in the registry.
+    prompt_provider: Literal["langfuse", "file"] = Field(default="file", alias="ASAS_PROMPT_PROVIDER")
     prompt_dir: str = Field(default="prompts", alias="ASAS_PROMPT_DIR")
     langfuse_public_key: str = Field(default="", alias="LANGFUSE_PUBLIC_KEY")
     langfuse_secret_key: str = Field(default="", alias="LANGFUSE_SECRET_KEY")
     langfuse_host: str = Field(default="https://cloud.langfuse.com", alias="LANGFUSE_HOST")
     tracing_enabled: bool = Field(default=True, alias="ASAS_TRACING")
+    tracing_provider: Literal["none", "langfuse"] = Field(default="none", alias="ASAS_TRACING_PROVIDER")
 
     # Models
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")

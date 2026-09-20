@@ -1,9 +1,4 @@
-"""Prompt resolution.
-
-Langfuse holds prompt text and versions. The runtime records the exact version
-it ran, so a trace can be reproduced. A missing production prompt is an error,
-never a silent fall back to the latest draft.
-"""
+"""File or Langfuse prompts, with immutable references captured at publication."""
 
 from __future__ import annotations
 
@@ -11,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from asas_agent.config import Settings
 from asas_agent.registry.schema import PromptRef
 
 
@@ -29,6 +25,33 @@ class PromptProvider(Protocol):
     async def resolve(self, ref: PromptRef) -> ResolvedPrompt: ...
 
 
+def langfuse_client(settings: Settings):
+    """Load the optional SDK only when the developer selects Langfuse."""
+    if not settings.langfuse_configured:
+        raise PromptError("Langfuse requires LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY")
+    try:
+        from langfuse import Langfuse
+    except ImportError as exc:
+        raise PromptError('Langfuse is optional. Install it with: uv pip install "asas-agent[langfuse]"') from exc
+    return Langfuse(
+        public_key=settings.langfuse_public_key,
+        secret_key=settings.langfuse_secret_key,
+        base_url=settings.langfuse_host,
+    )
+
+
+async def pin_prompt(ref: PromptRef, provider: PromptProvider | None) -> PromptRef:
+    """Freeze a provider version, or store rendered text when it has no versions."""
+    if ref.snapshot is not None:
+        return ref.model_copy(deep=True)
+    if provider is None:
+        raise PromptError("A working prompt provider is required to publish an agent")
+    resolved = await provider.resolve(ref)
+    if resolved.version is not None:
+        return PromptRef(name=ref.name, version=resolved.version, variables=ref.variables)
+    return PromptRef(name=ref.name, snapshot=resolved.text)
+
+
 class LangfusePrompts:
     """Reads prompts from Langfuse by version, or by label such as `production`."""
 
@@ -43,6 +66,8 @@ class LangfusePrompts:
         return self._client
 
     async def resolve(self, ref: PromptRef) -> ResolvedPrompt:
+        if ref.snapshot is not None:
+            return ResolvedPrompt(text=ref.snapshot, name=ref.name, version=None)
         client = self._get_client()
         try:
             if ref.version is not None:
@@ -58,35 +83,38 @@ class LangfusePrompts:
 
 
 class FilePrompts:
-    """Reads prompts from a folder. For local work before Langfuse is connected.
+    """Reads drafts from a folder and published snapshots from the definition.
 
     `agents/customer-advisor` reads `<dir>/agents/customer-advisor.md`.
-    Versions do not exist here, so a definition that pins a version is refused.
+    The registry stores the rendered text at publication; no service is needed.
     """
 
     def __init__(self, directory: str | Path = "prompts"):
         self.directory = Path(directory)
 
     async def resolve(self, ref: PromptRef) -> ResolvedPrompt:
+        if ref.snapshot is not None:
+            return ResolvedPrompt(text=ref.snapshot, name=ref.name, version=None)
         if ref.version is not None:
-            raise PromptError("File prompts have no versions. Use Langfuse, or reference the prompt by name only.")
+            raise PromptError("File prompts use published snapshots, not numeric versions. Reference the file by name.")
+        if ref.label not in (None, "production"):
+            raise PromptError("File prompts do not support labels. Reference the file by name.")
 
-        path = self.directory / f"{ref.name}.md"
-        if not path.exists():
-            raise PromptError(f"No prompt file at {path}")
+        root = self.directory.resolve()
+        path = (root / f"{ref.name}.md").resolve()
+        if not path.is_relative_to(root):
+            raise PromptError("Prompt files must stay inside ASAS_PROMPT_DIR")
 
-        text = path.read_text(encoding="utf-8")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise PromptError(f"Cannot read prompt file at {path}") from exc
         for key, value in ref.variables.items():
             text = text.replace("{{" + key + "}}", str(value))
         return ResolvedPrompt(text=text, name=ref.name, version=None)
 
 
-def build_prompt_provider(settings) -> PromptProvider:
+def build_prompt_provider(settings: Settings) -> PromptProvider:
     if settings.prompt_provider == "file":
         return FilePrompts(settings.prompt_dir)
-    if not settings.langfuse_configured:
-        raise PromptError(
-            "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are not set. "
-            "Set them, or use ASAS_PROMPT_PROVIDER=file for local work."
-        )
-    return LangfusePrompts()
+    return LangfusePrompts(client=langfuse_client(settings))

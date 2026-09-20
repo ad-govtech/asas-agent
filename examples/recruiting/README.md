@@ -9,7 +9,7 @@ uv run python -m examples.recruiting.seed     # publishes the three agents into 
 uv run python -m examples.recruiting.app      # http://localhost:8010
 ```
 
-Set `ASAS_PROMPT_PROVIDER=file` and `ASAS_PROMPT_DIR=examples/recruiting/prompts` to use the prompts in this folder, or upload them to Langfuse under the same names and leave the provider on `langfuse`.
+Set `ASAS_PROMPT_PROVIDER=file` and `ASAS_PROMPT_DIR=examples/recruiting/prompts` to use the prompts in this folder, or install `asas-agent[langfuse]`, upload them to your self-hosted or cloud Langfuse instance under the same names, and set the provider to `langfuse`. Set `LANGFUSE_HOST` and project keys for that instance. File prompts are snapshotted during seeding/publication and need no separate service. Tracing defaults to `none`; opt in independently with `ASAS_TRACING_PROVIDER=langfuse`.
 
 ## What it shows
 

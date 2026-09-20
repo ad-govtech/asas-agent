@@ -20,7 +20,7 @@ import typer
 from asas_agent.config import get_settings
 from asas_agent.registry.schema import AgentConfig
 
-app = typer.Typer(help="Agents as configuration: a Postgres registry, Langfuse prompts, a stateless runtime.")
+app = typer.Typer(help="Agents as configuration: a Postgres registry, file or Langfuse prompts, a stateless runtime.")
 agent_app = typer.Typer(help="Manage agent versions and environment bindings.")
 app.add_typer(agent_app, name="agent")
 
@@ -81,9 +81,10 @@ def init(
                     "ASAS_ENVIRONMENT=dev",
                     f"ASAS_API_KEY={secrets.token_urlsafe(24)}",
                     "",
-                    "# Prompts: langfuse everywhere shared, file for local work",
+                    "# Prompts: file (snapshotted on publish), or optional langfuse",
                     "ASAS_PROMPT_PROVIDER=file",
                     "ASAS_PROMPT_DIR=prompts",
+                    "ASAS_TRACING_PROVIDER=none",
                     "LANGFUSE_PUBLIC_KEY=",
                     "LANGFUSE_SECRET_KEY=",
                     "LANGFUSE_HOST=https://cloud.langfuse.com",
@@ -164,14 +165,20 @@ def doctor() -> None:
         typer.echo(f"database          failed: {exc}")
         problems.append(str(exc))
 
-    if settings.prompt_provider == "langfuse":
-        if settings.langfuse_configured:
+    from asas_agent.integrations.prompts import PromptError, build_prompt_provider
+
+    try:
+        build_prompt_provider(settings)
+        if settings.prompt_provider == "langfuse":
             typer.echo(f"prompts           langfuse at {settings.langfuse_host}")
         else:
-            typer.echo("prompts           langfuse keys are missing")
-            problems.append("LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are not set")
-    else:
-        typer.echo(f"prompts           files in {settings.prompt_dir} (local use only)")
+            typer.echo(f"prompts           files in {settings.prompt_dir} (snapshotted on publish)")
+    except PromptError as exc:
+        typer.echo(f"prompts           failed: {exc}")
+        problems.append(str(exc))
+
+    tracing = settings.tracing_provider if settings.tracing_enabled else "none"
+    typer.echo(f"tracing           {tracing}")
 
     typer.echo(f"openai key        {'set' if settings.openai_api_key else 'missing'}")
     typer.echo(f"model gateway     {settings.gateway_base_url or 'not configured'}")
@@ -226,19 +233,8 @@ def agent_add(
 
 
 async def _publish(platform, agent_key: str, version: int):
-    """Publish, pinning a moving prompt label to the version that resolves now."""
-    definition = await platform.repository.get(agent_key=agent_key, version=version)
-    config = definition.config
-    pinned = None
-
-    if config.prompt.version is None and platform.prompts is not None:
-        resolved = await platform.prompts.resolve(config.prompt)
-        if resolved.version is not None:
-            pinned = config.model_copy(deep=True)
-            pinned.prompt.version = resolved.version
-            pinned.prompt.label = None
-
-    return await platform.repository.publish(agent_key=agent_key, version=version, pinned_config=pinned)
+    """All callers use the repository's prompt pinning and snapshot logic."""
+    return await platform.repository.publish(agent_key=agent_key, version=version)
 
 
 @agent_app.command("publish")
@@ -253,7 +249,8 @@ def agent_publish(
         try:
             definition = await _publish(platform, agent_key, version)
             pinned = definition.config.prompt.version
-            typer.echo(f"{agent_key} v{version} published" + (f", prompt pinned to v{pinned}" if pinned else ""))
+            detail = f", prompt pinned to v{pinned}" if pinned else ", prompt snapshot stored"
+            typer.echo(f"{agent_key} v{version} published{detail}")
         finally:
             await platform.close()
 

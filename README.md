@@ -1,6 +1,6 @@
 # asas-agent
 
-Agents as configuration. An agent is a versioned row in Postgres: a prompt reference, a model, the tools it may use, and the limits it runs under. This package resolves that definition and runs it on the OpenAI Agents SDK, with prompts and traces in Langfuse.
+Agents as configuration. An agent is a versioned row in Postgres: a prompt reference, a model, the tools it may use, and the limits it runs under. This package resolves that definition and runs it on the OpenAI Agents SDK, with file prompts by default and optional Langfuse prompts and tracing.
 
 Any product installs it, runs one migration, registers its own tools, and has agents running. No new service to write, and no redeploy to change an agent.
 
@@ -8,7 +8,7 @@ Any product installs it, runs one migration, registers its own tools, and has ag
 your service ──► asas-agent runtime ──► OpenAI / gateway models
       │                  │
       │                  ├── Postgres: which agent version is live
-      │                  ├── Langfuse: prompt text and versions
+      │                  ├── Files / optional Langfuse: prompts
       │                  └── your tools: thin adapters to your APIs
       └── loads what it already knows the agent needs
 ```
@@ -34,7 +34,7 @@ asas-agent serve                        # POST /v1/agents/run on :8080
 |---|---|
 | `agent_definitions` | Every version of every agent, as JSONB. Published versions never change |
 | `agent_environment_bindings` | Which version each environment runs. Promotion and rollback move this row |
-| Langfuse | Prompt text and versions. The runtime records the version it used |
+| Prompts | Files snapshotted in Postgres on publish, or Langfuse version references |
 | Capability registry | Names in configuration bound to code in your app. The database never carries an implementation |
 | Output schemas | A Pydantic model per name, so an agent can return typed results |
 | Runtime API | `POST /v1/agents/run`, stateless, scale it horizontally |
@@ -86,7 +86,7 @@ asas-agent agent promote customer-advisor 1 --env production            # rolled
 asas-agent agent list customer-advisor
 ```
 
-Publishing resolves a prompt label such as `production` to the exact version live at that moment and stores it, so `customer-advisor v2` always means the same thing.
+Publishing freezes the prompt: file prompts are rendered and stored in the agent definition; Langfuse labels such as `production` are resolved to an exact version. Editing a file does not change published agents. Create and publish a new agent version to adopt the edit. File snapshots travel with promotion and rollback, and runtime servers do not need the original files.
 
 ## Rules the package enforces
 
@@ -97,13 +97,57 @@ Publishing resolves a prompt label such as `production` to the exact version liv
 - Sub-agents that reference each other in a loop are refused.
 - A missing production prompt is an error. The runtime never falls back to a draft.
 
+## Choose prompts and tracing
+
+The default installation needs **no Langfuse SDK, account, or server**. PostgreSQL is still required for the agent registry.
+
+| Choice | Prompt storage | Additional service |
+|---|---|---|
+| `file` (default) | Markdown files when publishing; immutable snapshots in the registry at runtime | None |
+| `langfuse` | Versioned prompts in your self-hosted Langfuse instance or Langfuse Cloud | Langfuse |
+
+For file prompts:
+
+```dotenv
+ASAS_PROMPT_PROVIDER=file
+ASAS_PROMPT_DIR=prompts
+ASAS_TRACING_PROVIDER=none
+```
+
+A prompt named `agents/customer-advisor` reads `prompts/agents/customer-advisor.md`. Variables such as `{{department}}` are substituted from the definition's `prompt.variables` before publication. File prompts do not support numeric versions or custom labels; the agent version identifies the stored snapshot (`prompt_version` is null).
+
+For Langfuse, install the optional dependency:
+
+```bash
+uv pip install "asas-agent[langfuse]"
+```
+
+Both **self-hosted and cloud deployments** use the same integration. For a government/internal deployment, set the URL and project keys from your own instance:
+
+```dotenv
+ASAS_PROMPT_PROVIDER=langfuse
+LANGFUSE_HOST=https://langfuse.internal.example
+LANGFUSE_PUBLIC_KEY=<your-instance-public-key>
+LANGFUSE_SECRET_KEY=<your-instance-secret-key>
+ASAS_TRACING_PROVIDER=none
+```
+
+The application must be able to reach that URL. For Langfuse Cloud, use `https://cloud.langfuse.com` (or your region's endpoint) and that project's keys.
+
+Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to the configured instance, including when prompts use files. `none` disables runtime tracing, including the Agents SDK's built-in trace export. `ASAS_TRACING=false` overrides the provider and disables tracing. There is no silent fallback when an explicitly selected provider is unavailable.
+
+**Existing deployments:** set `ASAS_PROMPT_PROVIDER=langfuse` explicitly and install the extra to retain Langfuse prompts. Set `ASAS_TRACING_PROVIDER=langfuse` to retain tracing. Previously published file definitions are not rewritten: they continue reading files until replaced by a newly published version. Switching providers does not convert existing Langfuse version references; create new drafts referencing files to migrate those agents.
+
 ## Settings
 
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | Postgres for the registry. `postgres://` and `?sslmode=require` are accepted |
 | `ASAS_API_KEY` | Required as `X-API-Key` on the runtime API when set |
-| `ASAS_PROMPT_PROVIDER` | `langfuse` everywhere shared, `file` for local work |
+| `ASAS_PROMPT_PROVIDER` | `file` (default) or `langfuse` |
+| `ASAS_PROMPT_DIR` | Prompt folder for file drafts (default: `prompts`) |
+| `ASAS_TRACING_PROVIDER` | `none` (default) or `langfuse`, independent of prompts |
+| `ASAS_TRACING` | Set `false` to disable tracing regardless of provider |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` | Prompts and traces |
 | `OPENAI_API_KEY` | OpenAI models |
 | `MODEL_GATEWAY_URL`, `MODEL_GATEWAY_KEY` | Any OpenAI-compatible gateway, such as the AI Factory model gateway |
@@ -123,7 +167,7 @@ uv add "asas-agent[tracing]"
 ## Development
 
 ```bash
-uv venv && uv pip install -e ".[dev,tracing]"
+uv venv && uv pip install -e ".[dev]"
 uv run pytest
 uv run ruff check .
 ```
