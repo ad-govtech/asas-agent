@@ -137,12 +137,14 @@ A sub-agent is filled from the same request variables as its parent, minus any i
 
 A fan-out - one call per rubric area, one per candidate in a batch - starts dozens of runs in the same second, and each one has to know which version its environment is bound to. That question is answered from memory:
 
-- A **published definition never changes**, so its body is reused freely.
-- An **environment binding does change**, because that is what promotion and rollback are, so it is reused for `ASAS_DEFINITION_CACHE_SECONDS` (5 by default). A rollback reaches every running process within that window, with no deployment.
-- Runs that start together **share one query**: forty concurrent runs ask the registry once, not forty times.
-- A promotion or publication made **through this process** clears what it affects at once, so the CLI and an embedded app never wait out the window for their own change.
+- **Which version an environment runs** is reused for `ASAS_DEFINITION_CACHE_SECONDS` (5 by default). That binding is what promotion and rollback move, so the window is what a rollback takes to reach a process that is already running, with no deployment.
+- Runs that start together **share one query**: forty concurrent runs ask the registry once, not forty times. A run that hits its deadline and walks away leaves the answer behind for the others.
+- A promotion made **through this process** drops what it affects at once, and a query already in flight when it lands is not allowed to put the old version back.
+- Each run is handed **its own copy** of the definition, so one run cannot change what another reads.
 
-Set `ASAS_DEFINITION_CACHE_SECONDS=0` to read the registry on every run. Prompts are cached too: Langfuse's SDK keeps them for 60 seconds, and a prompt file is re-read only after it changes on disk.
+`ASAS_DEFINITION_CACHE_SECONDS=0` asks the registry on every run; concurrent runs still share one query, since they are asking the same question at the same moment.
+
+Prompts are cached too: Langfuse's SDK keeps them for 60 seconds, and a prompt file is re-read once it changes on disk. A replacement that preserves the file's timestamp and size (`cp -p`, `rsync -a`, a restored backup) looks unchanged, so restart after one.
 
 ## Rules the package enforces
 

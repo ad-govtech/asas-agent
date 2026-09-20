@@ -350,7 +350,7 @@ class FilePrompts:
     def __init__(self, directory: str | Path = "prompts", *, cache: bool = True):
         self.directory = Path(directory)
         #: Parsed templates, keyed by what the file looked like when they were read.
-        self._cache: dict[str, tuple[tuple[Any, ...], PromptTemplate]] = {} if cache else None
+        self._cache: dict[str, tuple[tuple[Any, ...], PromptTemplate]] | None = {} if cache else None
 
     async def template(self, ref: PromptRef) -> PromptTemplate:
         snapshot = _snapshot_template(ref)
@@ -372,7 +372,10 @@ class FilePrompts:
             raise PromptError(f"Cannot read prompt file at {chat_path}") from exc
 
         path = chat_path if is_chat else self._path(f"{ref.name}.md")
-        cached = self._cached(ref.name, path)
+        # Stamp before reading: a file written while we read it must not be
+        # cached under the stamp of the version we did not get.
+        stamp = self._stamp(path)
+        cached = self._cached(ref.name, stamp)
         if cached is not None:
             return cached
 
@@ -390,30 +393,37 @@ class FilePrompts:
                 messages=(PromptMessage(role="system", content=self._read(path)),),
                 is_chat=False,
             )
-        self._remember(ref.name, path, template)
+        self._remember(ref.name, stamp, path, template)
         return template
 
     def _stamp(self, path: Path) -> tuple[Any, ...] | None:
-        """What the file is right now. An edit changes it, so an edit is picked up."""
+        """What the file is right now. An edit changes it, so an edit is picked up.
+
+        A replacement that preserves the original timestamp and size - `cp -p`,
+        `rsync -a`, restoring a backup - looks unchanged, so restart the
+        process after one, or turn the cache off.
+        """
         try:
             status = path.stat()
         except OSError:
             return None
         return (str(path), status.st_mtime_ns, status.st_size)
 
-    def _cached(self, name: str, path: Path) -> PromptTemplate | None:
-        if self._cache is None:
+    def _cached(self, name: str, stamp: tuple[Any, ...] | None) -> PromptTemplate | None:
+        if self._cache is None or stamp is None:
             return None
         entry = self._cache.get(name)
         if entry is None:
             return None
-        stamp, template = entry
-        return template if stamp == self._stamp(path) else None
+        cached_stamp, template = entry
+        return template if cached_stamp == stamp else None
 
-    def _remember(self, name: str, path: Path, template: PromptTemplate) -> None:
-        stamp = self._stamp(path)
-        if self._cache is not None and stamp is not None:
-            self._cache[name] = (stamp, template)
+    def _remember(self, name: str, stamp: tuple[Any, ...] | None, path: Path, template: PromptTemplate) -> None:
+        if self._cache is None or stamp is None:
+            return
+        if self._stamp(path) != stamp:
+            return  # The file changed while we read it; read it again next time.
+        self._cache[name] = (stamp, template)
 
     async def resolve(self, ref: PromptRef, variables: dict[str, Any] | None = None) -> ResolvedPrompt:
         template = await self.template(ref)
