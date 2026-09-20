@@ -24,6 +24,7 @@ from asas_agent.integrations.models import ModelError, ModelRegistry
 from asas_agent.integrations.prompts import LangfusePrompts
 from asas_agent.registry.schema import AgentConfig, PromptRef
 from asas_agent.runtime.context import RuntimeContext
+from asas_agent.runtime.factory import BuiltAgent
 
 
 @pytest.fixture
@@ -218,6 +219,19 @@ async def test_runtime_deadline_cancels_pending_work(settings, monkeypatch, phas
     if phase == "assembly":
         monkeypatch.setattr(platform.runtime.factory, "build", wait_forever)
     else:
+        # Hand the runtime an agent that is already assembled, so the deadline
+        # is the execution's alone. Otherwise a slow machine can spend the
+        # whole budget building one, and the run times out before it starts.
+        prepared = BuiltAgent(
+            agent=SimpleNamespace(),
+            agent_version=1,
+            prompt_version=None,
+            config=config(),
+            max_turns=2,
+            timeout_seconds=0.02,
+            prompt_messages=(),
+        )
+        monkeypatch.setattr(platform.runtime.factory, "build", AsyncMock(return_value=prepared))
         monkeypatch.setattr(Runner, "run", wait_forever)
     try:
         with pytest.raises(TimeoutError):
