@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from asas_agent.integrations.models import ModelError, ModelRegistry
-from asas_agent.integrations.prompts import PromptMessage, PromptProvider
+from asas_agent.integrations.prompts import PromptError, PromptMessage, PromptProvider
 from asas_agent.registry.capabilities import CapabilityRegistry
 from asas_agent.registry.guardrails import GuardrailRegistry
 from asas_agent.registry.outputs import OutputSchemaRegistry
@@ -73,6 +73,7 @@ class AgentFactory:
         environment: str,
         context: RuntimeContext,
         prompt_variables: dict[str, Any] | None = None,
+        is_sub_agent: bool = False,
         visited: set[str] | None = None,
     ) -> BuiltAgent:
         from agents import Agent, ModelSettings
@@ -89,6 +90,13 @@ class AgentFactory:
 
         async with asyncio.timeout_at(started + min(context.timeout_seconds, config.runtime.timeout_seconds)):
             resolved_prompt = await self.prompts.resolve(config.prompt, prompt_variables)
+            if is_sub_agent and resolved_prompt.messages:
+                # A sub-agent is handed the caller's or the parent's input, so
+                # there is nowhere to put its own opening messages.
+                raise PromptError(
+                    f"Sub-agent {agent_key!r} uses a chat prompt with user or assistant messages, "
+                    "which a sub-agent cannot send. Move that content into its system message."
+                )
             model = self.models.resolve(config.model.provider, config.model.name)
             capability = self.models.capability(config.model.provider, config.model.name)
 
@@ -112,6 +120,8 @@ class AgentFactory:
                     agent_key=ref.agent_key,
                     environment=ref.environment,
                     context=context,
+                    prompt_variables=prompt_variables,
+                    is_sub_agent=True,
                     visited=set(visited),
                 )
                 if ref.mode == "tool":

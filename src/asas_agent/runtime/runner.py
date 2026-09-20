@@ -35,6 +35,11 @@ def _run_input(
     payload = _payload(user_input, business_context)
 
     if not prompt_messages:
+        if not user_input and not business_context:
+            raise ValueError(
+                "This agent's prompt sends no messages of its own, "
+                "so the run needs an input or a context to start from."
+            )
         return json.dumps(payload, ensure_ascii=False, default=str)
 
     items: list[dict[str, str]] = [{"role": m.role, "content": m.content} for m in prompt_messages]

@@ -152,14 +152,37 @@ def _split(template: PromptTemplate, messages: tuple[PromptMessage, ...]) -> Res
     )
 
 
-def _guard_rendered(messages: tuple[PromptMessage, ...], prompt_name: str) -> None:
-    """A provider that renders for us still must not leave a placeholder behind."""
-    missing = sorted({name for message in messages for name in _VARIABLE.findall(message.content)})
+def _require_values(template_messages: tuple[PromptMessage, ...], variables: dict[str, Any], prompt_name: str) -> None:
+    """Check the template's placeholders, before anything is substituted.
+
+    What a value contains is never inspected: a CV or a job description may
+    legitimately hold `{{...}}`, and that is not a placeholder of this prompt.
+    """
+    required = {name for message in template_messages for name in _VARIABLE.findall(message.content)}
+    missing = sorted(required - set(variables))
     if missing:
         raise PromptVariableError(
             f"Prompt {prompt_name!r} needs values for: {', '.join(missing)}. "
             "Pass them as prompt variables, in the definition or with the request."
         )
+
+
+def merge_variables(ref: PromptRef, variables: dict[str, Any] | None) -> dict[str, Any]:
+    """The definition's values, plus this request's.
+
+    A request may add values; it may not replace one the published definition
+    sets. Definition variables are part of an immutable version, and they reach
+    the system instructions, so letting a caller rewrite one would let any
+    caller rewrite a published agent's instructions.
+    """
+    request = variables or {}
+    frozen = sorted(set(ref.variables) & set(request))
+    if frozen:
+        raise PromptVariableError(
+            f"Prompt {ref.name!r} already sets {', '.join(frozen)} in the published definition. "
+            "Publish a new version to change it; a request cannot."
+        )
+    return {**ref.variables, **request}
 
 
 def _snapshot_template(ref: PromptRef) -> PromptTemplate | None:
@@ -246,7 +269,7 @@ class LangfusePrompts:
         )
 
     async def resolve(self, ref: PromptRef, variables: dict[str, Any] | None = None) -> ResolvedPrompt:
-        values = {**ref.variables, **(variables or {})}
+        values = merge_variables(ref, variables)
         snapshot = _snapshot_template(ref)
         if snapshot is not None:
             return render(snapshot, values)
@@ -254,10 +277,10 @@ class LangfusePrompts:
 
     def _resolve(self, ref: PromptRef, values: dict[str, Any]) -> ResolvedPrompt:
         prompt = self._fetch(ref)
+        self._require_values(prompt, values, ref.name)
         # Langfuse renders its own templates, so the text matches what its UI shows.
         compiled = prompt.compile(**values) if values else prompt.compile()
         messages, is_chat = _as_messages(compiled, ref.name)
-        _guard_rendered(messages, ref.name)
         template = PromptTemplate(
             name=ref.name,
             version=getattr(prompt, "version", None),
@@ -265,6 +288,23 @@ class LangfusePrompts:
             is_chat=is_chat,
         )
         return _split(template, messages)
+
+    def _require_values(self, prompt: Any, values: dict[str, Any], prompt_name: str) -> None:
+        """Check the unrendered template, so a value that contains `{{...}}` is never mistaken for one."""
+        raw = getattr(prompt, "prompt", None)
+        if raw is not None:
+            template_messages, _ = _as_messages(raw, prompt_name)
+            _require_values(template_messages, values, prompt_name)
+            return
+
+        required = getattr(prompt, "variables", None)
+        if required:
+            missing = sorted(set(required) - set(values))
+            if missing:
+                raise PromptVariableError(
+                    f"Prompt {prompt_name!r} needs values for: {', '.join(missing)}. "
+                    "Pass them as prompt variables, in the definition or with the request."
+                )
 
     def _fetch(self, ref: PromptRef):
         client = self._get_client()
@@ -317,7 +357,7 @@ class FilePrompts:
 
     async def resolve(self, ref: PromptRef, variables: dict[str, Any] | None = None) -> ResolvedPrompt:
         template = await self.template(ref)
-        return render(template, {**ref.variables, **(variables or {})})
+        return render(template, merge_variables(ref, variables))
 
     def _path(self, relative: str) -> Path:
         root = self.directory.resolve()

@@ -119,7 +119,7 @@ def create_app(platform: Platform | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (CapabilityError, OutputSchemaError) as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except PromptVariableError as exc:
+        except (PromptVariableError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except (PromptError, ModelError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc

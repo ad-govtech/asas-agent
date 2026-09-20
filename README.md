@@ -101,10 +101,12 @@ A prompt is either one block of text or a chat prompt: an ordered list of role-t
 
 System and developer messages become the agent's instructions. User and assistant messages open the run, so a prompt author decides where each fact lands instead of receiving one JSON blob.
 
-Placeholders are filled from two places, with the request winning a tie:
+Placeholders are filled from two places:
 
 - `prompt.variables` in the agent definition, for values that are part of the published agent;
 - `prompt_variables` on the request, for values that belong to this call.
+
+A request may add values; it may not replace one the definition sets. Definition variables reach the system instructions, so a caller that could override one could rewrite a published agent's instructions. Publish a new version to change such a value.
 
 ```python
 result = await platform.runtime.run(
@@ -117,7 +119,9 @@ result = await platform.runtime.run(
 
 The same values can be sent to the runtime API as `prompt_variables`, or from the CLI with `--var name=value`.
 
-A placeholder with no value is an error: the model is never handed a literal `{{application}}` to read. Values are substituted once, so a value that itself contains `{{...}}` is left alone. `user_input` and `context` still work with a chat prompt and arrive as a JSON message after the prompt's own, but only when the caller sends them.
+A placeholder with no value is an error: the model is never handed a literal `{{application}}` to read. Only the prompt's own placeholders count, so a CV or a job description that contains `{{...}}` is passed through as the data it is.
+
+A sub-agent is filled from the same request variables as its parent. Its prompt may not carry user or assistant messages, because a sub-agent is handed its caller's input and has nowhere to put them; that is refused at build time rather than dropped. `user_input` and `context` still work with a chat prompt and arrive as a JSON message after the prompt's own, but only when the caller sends them.
 
 ## Rules the package enforces
 
@@ -128,6 +132,7 @@ A placeholder with no value is an error: the model is never handed a literal `{{
 - Sub-agents that reference each other in a loop are refused.
 - A missing production prompt is an error. The runtime never falls back to a draft.
 - A prompt variable with no value is an error, not a placeholder left in the text.
+- A request cannot replace a variable the published definition sets.
 - A chat prompt with no system message is refused: an agent without instructions is a bug.
 
 ## Choose prompts and tracing
