@@ -132,9 +132,9 @@ A sub-agent is filled from the same request variables as its parent, minus any i
 A fan-out - one call per rubric area, one per candidate in a batch - starts dozens of runs in the same second, and each one has to know which version its environment is bound to. That question is answered from memory:
 
 - Runs that ask **at the same moment share one query**: forty concurrent runs ask the registry once, not forty times. Measured against a local Postgres, that is 128 ms of queueing against a five-connection pool reduced to 5 ms.
-- **Nothing is kept afterwards.** The next run asks again, so a promotion is visible immediately and there is no staleness to configure or reason about.
+- **Nothing is kept afterwards.** The next run asks again, so a promotion is visible without anything to configure or expire.
 - A run that hits its deadline and walks away **leaves the answer for the others**; it does not cancel the query they are waiting on.
-- A promotion made **through this process** detaches the query it affects, so a run arriving after it does not join an answer that predates it.
+- A promotion made **through this process** detaches the query it affects, so a run arriving after it asks again. A promotion made elsewhere - another process, the CLI - cannot reach into this one, so a run arriving while a query is already open may still be given the version that was live when that query started. The window is one query; the run after it is current.
 - Each run is handed **its own copy** of the definition, so one run cannot change what another reads.
 
 Prompts are cached: Langfuse's SDK keeps them for 60 seconds, and a prompt file is re-read once it changes on disk. A replacement that preserves the file's timestamp and size (`cp -p`, `rsync -a`, a restored backup) looks unchanged, so restart after one.
