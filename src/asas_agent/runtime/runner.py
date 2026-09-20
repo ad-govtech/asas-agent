@@ -1,9 +1,16 @@
-"""Running an agent, with the trace metadata that makes a run reproducible."""
+"""Running an agent, and recording what ran.
+
+A run is given two things: the `inputs` its prompt asks for, and optionally a
+`message` from whoever is talking to it. Values always fill placeholders and a
+message is always a message, so adding a placeholder to a prompt never changes
+what the other one means.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import unicodedata
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any
@@ -12,43 +19,64 @@ from asas_agent.integrations.prompts import PromptMessage
 from asas_agent.runtime.context import RuntimeContext
 from asas_agent.runtime.factory import AgentFactory
 
+#: What a run may be called, in bytes, because that is what a backend stores.
+RUN_NAME_MAX_BYTES = 200
+
+#: How the runtime names a run of an agent. A request cannot claim one.
+RUNTIME_NAME_PREFIX = "agent:"
+
 
 class RunInputError(ValueError):
     """Raised when what the caller sent cannot start a run."""
 
 
-def _payload(user_input: str, business_context: dict[str, Any] | None) -> dict[str, Any]:
-    payload: dict[str, Any] = {"request": user_input}
-    if business_context:
-        payload["context"] = business_context
-    return payload
+def _run_name(name: str | None, agent_key: str) -> str:
+    """What this run is called in the trace.
 
-
-def _run_input(
-    prompt_messages: tuple[PromptMessage, ...],
-    user_input: str,
-    business_context: dict[str, Any] | None,
-) -> Any:
-    """What the run starts from.
-
-    A text prompt keeps the original contract: one JSON message holding the
-    request and the context the calling service loaded. A chat prompt sends its
-    own messages first, because the prompt author decided where each fact goes,
-    and the JSON message follows only when the caller passed something.
+    A product that fans out runs one agent many times over - once per rubric
+    area, once per candidate - and has to tell those runs apart afterwards,
+    which is what an evaluation harness reads. Without a name, the agent's own.
     """
-    payload = _payload(user_input, business_context)
+    if name is None:
+        return f"{RUNTIME_NAME_PREFIX}{agent_key}"
 
-    if not prompt_messages:
-        if not user_input and not business_context:
-            raise RunInputError(
-                "This agent's prompt sends no messages of its own, "
-                "so the run needs an input or a context to start from."
-            )
-        return json.dumps(payload, ensure_ascii=False, default=str)
+    cleaned = " ".join(name.split())
+    if not cleaned:
+        raise RunInputError("A run name cannot be blank. Leave it out to use the agent's own name.")
 
-    items: list[dict[str, str]] = [{"role": m.role, "content": m.content} for m in prompt_messages]
-    if user_input or business_context:
-        items.append({"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)})
+    hidden = {c for c in cleaned if unicodedata.category(c) in {"Cc", "Cf"}}
+    if hidden:
+        raise RunInputError(
+            "A run name cannot contain control or formatting characters: "
+            f"{', '.join(f'U+{ord(c):04X}' for c in sorted(hidden))}."
+        )
+
+    size = len(cleaned.encode("utf-8"))
+    if size > RUN_NAME_MAX_BYTES:
+        raise RunInputError(f"A run name is at most {RUN_NAME_MAX_BYTES} bytes; this one is {size}.")
+
+    if cleaned.startswith(RUNTIME_NAME_PREFIX):
+        raise RunInputError(
+            f"A run name cannot start with {RUNTIME_NAME_PREFIX!r}: that is how the runtime names a run of an "
+            "agent, and a reader takes it at its word. Name this run after what it is doing."
+        )
+    return cleaned
+
+
+def _run_input(prompt_messages: tuple[PromptMessage, ...], message: str) -> list[dict[str, str]]:
+    """What the run starts from: the prompt's own user message, then the caller's.
+
+    One of the two has to exist. A prompt that opens the conversation itself
+    needs no message; an agent answering someone needs theirs.
+    """
+    items = [{"role": m.role, "content": m.content} for m in prompt_messages]
+    if message:
+        items.append({"role": "user", "content": message})
+    if not items:
+        raise RunInputError(
+            "This agent's prompt asks nothing on its own, so the run needs a message to answer. "
+            "Either send one, or give the prompt a user message."
+        )
     return items
 
 
@@ -59,6 +87,8 @@ class AgentRunResult:
     agent_version: int
     prompt_version: int | None
     trace_id: str | None
+    #: What this run is called in the trace, so a caller can find it again.
+    run_name: str
     toolset: list[str]
 
 
@@ -70,14 +100,14 @@ class AgentRuntime:
         tracer=None,
         max_turns_ceiling: int = 20,
         timeout_ceiling_seconds: float = 300,
-        prompt_variables_max_bytes: int = 256_000,
+        inputs_max_bytes: int = 256_000,
         dependencies: dict[str, Any] | None = None,
     ):
         self.factory = factory
         self._tracer = tracer
         self.max_turns_ceiling = max_turns_ceiling
         self.timeout_ceiling_seconds = timeout_ceiling_seconds
-        self.prompt_variables_max_bytes = prompt_variables_max_bytes
+        self.inputs_max_bytes = inputs_max_bytes
         self.default_dependencies = dict(dependencies or {})
 
     async def run(
@@ -85,16 +115,17 @@ class AgentRuntime:
         *,
         agent_key: str,
         environment: str,
-        user_input: str = "",
-        business_context: dict[str, Any] | None = None,
-        prompt_variables: dict[str, Any] | None = None,
+        inputs: dict[str, Any] | None = None,
+        message: str = "",
+        run_name: str | None = None,
         context: RuntimeContext,
     ) -> AgentRunResult:
         from agents import RunConfig, Runner
 
         if context.max_turns < 1 or context.timeout_seconds <= 0:
             raise ValueError("Runtime turn and timeout limits must be positive")
-        self._check_size(prompt_variables)
+        self._check_size(inputs)
+        name = _run_name(run_name, agent_key)
         context = replace(
             context,
             environment=environment,
@@ -109,17 +140,17 @@ class AgentRuntime:
                 agent_key=agent_key,
                 environment=environment,
                 context=context,
-                prompt_variables=prompt_variables,
+                inputs=inputs,
             )
             # Count assembly against the definition's deadline too.
             if asyncio.get_running_loop().time() >= started + built.timeout_seconds:
                 raise TimeoutError("Agent assembly exceeded its execution deadline")
             deadline.reschedule(started + built.timeout_seconds)
 
-            async with self._trace(agent_key, context) as trace_id:
+            async with self._trace(name, agent_key, context) as trace_id:
                 result = await Runner.run(
                     built.agent,
-                    input=_run_input(built.prompt_messages, user_input, business_context),
+                    input=_run_input(built.prompt_messages, message),
                     context=context,
                     max_turns=built.max_turns,
                     run_config=RunConfig(tracing_disabled=self._tracer is None),
@@ -131,30 +162,32 @@ class AgentRuntime:
             agent_version=built.agent_version,
             prompt_version=built.prompt_version,
             trace_id=trace_id,
+            run_name=name,
             toolset=list(built.config.tools),
         )
 
-    def _check_size(self, prompt_variables: dict[str, Any] | None) -> None:
-        """Prompt variables land in the instructions, which are re-sent on every turn."""
-        if not prompt_variables:
+    def _check_size(self, inputs: dict[str, Any] | None) -> None:
+        """Inputs land in the instructions, which are re-sent on every turn of a run."""
+        if not inputs:
             return
-        size = len(json.dumps(prompt_variables, ensure_ascii=False, default=str).encode("utf-8"))
-        if size > self.prompt_variables_max_bytes:
+        size = len(json.dumps(inputs, ensure_ascii=False, default=str).encode("utf-8"))
+        if size > self.inputs_max_bytes:
             raise RunInputError(
-                f"The prompt variables are {size} bytes, over the {self.prompt_variables_max_bytes} byte limit. "
-                "Send large data as context, or raise ASAS_PROMPT_VARIABLES_MAX_BYTES."
+                f"The inputs are {size} bytes, over the {self.inputs_max_bytes} byte limit. "
+                "Send less, or raise ASAS_INPUTS_MAX_BYTES."
             )
 
     @asynccontextmanager
-    async def _trace(self, agent_key: str, context: RuntimeContext):
+    async def _trace(self, name: str, agent_key: str, context: RuntimeContext):
         """Open a Langfuse span when tracing is on; otherwise do nothing."""
         tracer = self._tracer
         if tracer is None:
             yield None
             return
         try:
-            with tracer.start_as_current_observation(name=f"agent:{agent_key}") as observation:
+            with tracer.start_as_current_observation(name=name) as observation:
                 tracer.update_current_trace(
+                    name=name,
                     user_id=context.user_id,
                     session_id=context.correlation_id,
                     metadata={**context.trace_metadata, "tenant_id": context.tenant_id},

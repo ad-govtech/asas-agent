@@ -65,19 +65,19 @@ async def test_a_chat_prompt_splits_into_instructions_and_opening_messages():
     assert resolved.version == 7
 
 
-async def test_several_system_messages_join_in_order():
-    provider = LangfusePrompts(
-        chat_client(
-            [
-                {"role": "system", "content": "First."},
-                {"role": "developer", "content": "Second."},
-                {"role": "user", "content": "Go."},
-            ]
-        )
-    )
-    resolved = await provider.resolve(PromptRef(name="scorer"))
-    assert resolved.instructions == "First.\n\nSecond."
-    assert [m.role for m in resolved.messages] == ["user"]
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [{"role": "system", "content": "First."}, {"role": "system", "content": "Second."}],
+        [{"role": "system", "content": "Go."}, {"role": "user", "content": "A"}, {"role": "user", "content": "B"}],
+        [{"role": "user", "content": "A"}, {"role": "system", "content": "Go."}],
+    ],
+)
+async def test_a_shape_other_than_one_system_and_one_user_is_refused(messages):
+    """The narrow shape is the whole contract: it is what a reader can hold in their head."""
+    provider = LangfusePrompts(chat_client(messages))
+    with pytest.raises(PromptShapeError, match="one system message"):
+        await provider.resolve(PromptRef(name="scorer"))
 
 
 async def test_a_text_prompt_still_becomes_instructions_with_no_messages(tmp_path):
@@ -89,7 +89,7 @@ async def test_a_text_prompt_still_becomes_instructions_with_no_messages(tmp_pat
 
 async def test_a_chat_prompt_without_a_system_message_is_refused():
     provider = LangfusePrompts(chat_client([{"role": "user", "content": "Just do it"}]))
-    with pytest.raises(PromptError, match="no system message"):
+    with pytest.raises(PromptShapeError, match="one system message"):
         await provider.resolve(PromptRef(name="scorer"))
 
 
@@ -195,22 +195,21 @@ def test_render_is_a_single_pass_over_each_message():
 # ----- what the run is started from -------------------------------------------------
 
 
-def test_a_text_prompt_sends_the_json_payload_exactly_as_before():
-    sent = _run_input((), "Explain this.", {"application": 1})
-    assert json.loads(sent) == {"request": "Explain this.", "context": {"application": 1}}
-
-
-def test_a_chat_prompt_sends_its_own_messages_first():
+def test_a_prompt_that_asks_its_own_question_needs_nothing_from_the_caller():
     messages = (PromptMessage(role="user", content="Profile: Ada"),)
-    sent = _run_input(messages, "", None)
-    assert sent == [{"role": "user", "content": "Profile: Ada"}]
+    assert _run_input(messages, "") == [{"role": "user", "content": "Profile: Ada"}]
 
 
-def test_a_chat_prompt_appends_the_payload_only_when_the_caller_sent_something():
+def test_a_caller_message_follows_the_prompts_own():
     messages = (PromptMessage(role="user", content="Profile: Ada"),)
-    sent = _run_input(messages, "Anything else?", {"application": 1})
-    assert sent[0] == {"role": "user", "content": "Profile: Ada"}
-    assert json.loads(sent[1]["content"]) == {"request": "Anything else?", "context": {"application": 1}}
+    assert _run_input(messages, "Anything else?") == [
+        {"role": "user", "content": "Profile: Ada"},
+        {"role": "user", "content": "Anything else?"},
+    ]
+
+
+def test_a_prompt_with_only_instructions_is_started_by_the_callers_message():
+    assert _run_input((), "Explain this.") == [{"role": "user", "content": "Explain this."}]
 
 
 def _configured_repository(configs):
@@ -260,7 +259,7 @@ async def test_the_runtime_passes_request_variables_through_to_the_prompt(monkey
     result = await runtime.run(
         agent_key="scorer",
         environment="dev",
-        prompt_variables={"candidate_profile": "Ada"},
+        inputs={"candidate_profile": "Ada"},
         context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
     )
 
@@ -304,10 +303,10 @@ async def test_a_sub_agent_whose_chat_prompt_has_messages_is_refused(tmp_path):
         )
 
 
-def test_a_text_prompt_run_with_nothing_to_say_is_refused():
-    """Without opening messages and without input, the model would be asked to answer an empty request."""
-    with pytest.raises(ValueError, match="needs an input or a context"):
-        _run_input((), "", None)
+def test_a_run_with_nothing_to_say_is_refused():
+    """With neither a question in the prompt nor one from the caller, there is nothing to answer."""
+    with pytest.raises(RunInputError, match="needs a message to answer"):
+        _run_input((), "")
 
 
 # ----- placeholder syntax, matching Langfuse exactly -----------------------------------
@@ -365,11 +364,8 @@ async def test_every_missing_variable_is_reported_at_once(tmp_path):
     ("messages", "expected"),
     [
         ([{"role": "system", "content": "   "}, {"role": "user", "content": "go"}], "it is empty"),
-        ([{"role": "user", "content": "go"}], "no system message"),
-        (
-            [{"role": "user", "content": "Q"}, {"role": "system", "content": "Now answer"}],
-            "after a user or assistant message",
-        ),
+        ([{"role": "user", "content": "go"}], "one system message"),
+        ([{"role": "user", "content": "Q"}, {"role": "system", "content": "Now answer"}], "one system message"),
     ],
 )
 async def test_a_prompt_that_cannot_instruct_an_agent_is_refused(tmp_path, messages, expected):
@@ -381,7 +377,7 @@ async def test_a_prompt_that_cannot_instruct_an_agent_is_refused(tmp_path, messa
 async def test_a_broken_prompt_is_refused_at_publication_not_on_every_run(tmp_path):
     """Publishing is where configuration is checked; a run is too late to find this."""
     provider = file_prompts(tmp_path, [{"role": "user", "content": "Just do it"}])
-    with pytest.raises(PromptShapeError, match="no system message"):
+    with pytest.raises(PromptShapeError, match="one system message"):
         await pin_prompt(PromptRef(name="scorer"), provider)
 
 
@@ -418,14 +414,14 @@ async def test_a_chat_prompt_file_wins_over_a_text_file_of_the_same_name(tmp_pat
 # ----- what a request may fill ---------------------------------------------------------
 
 
-async def test_prompt_variables_larger_than_the_ceiling_are_refused(tmp_path):
+async def test_inputs_larger_than_the_ceiling_are_refused(tmp_path):
     runtime = _runtime(file_prompts(tmp_path), None)
-    runtime.prompt_variables_max_bytes = 100
+    runtime.inputs_max_bytes = 100
     with pytest.raises(RunInputError, match="over the 100 byte limit"):
         await runtime.run(
             agent_key="scorer",
             environment="dev",
-            prompt_variables={"candidate_profile": "x" * 200},
+            inputs={"candidate_profile": "x" * 200},
             context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
         )
 
@@ -455,7 +451,7 @@ async def test_the_api_answers_a_caller_error_and_a_broken_definition_differentl
     body = {
         "agent_key": "scorer",
         "input": "hi",
-        "prompt_variables": {"candidate_profile": "Ada"},
+        "inputs": {"candidate_profile": "Ada"},
         "execution": {"tenant_id": "T1", "user_id": "U1", "correlation_id": "R1"},
     }
     transport = httpx.ASGITransport(app=create_app(platform))
@@ -463,7 +459,7 @@ async def test_the_api_answers_a_caller_error_and_a_broken_definition_differentl
         response = await client.post("/v1/agents/run", json=body)
 
     assert response.status_code == status
-    assert platform.runtime.run.call_args.kwargs["prompt_variables"] == {"candidate_profile": "Ada"}
+    assert platform.runtime.run.call_args.kwargs["inputs"] == {"candidate_profile": "Ada"}
 
 
 def test_the_cli_passes_variables_and_rejects_a_pair_without_an_equals(monkeypatch):
@@ -477,11 +473,11 @@ def test_the_cli_passes_variables_and_rejects_a_pair_without_an_equals(monkeypat
     platform = SimpleNamespace(runtime=SimpleNamespace(run=run), close=AsyncMock())
     monkeypatch.setattr("asas_agent.cli.main._platform", lambda *a, **k: platform)
 
-    result = CliRunner().invoke(cli_app, ["run", "scorer", "", "--var", "area=Delivery", "--var", "note=a=b"])
+    result = CliRunner().invoke(cli_app, ["run", "scorer", "--input", "area=Delivery", "--input", "note=a=b"])
     assert result.exit_code == 0, result.output
-    assert run.call_args.kwargs["prompt_variables"] == {"area": "Delivery", "note": "a=b"}
+    assert run.call_args.kwargs["inputs"] == {"area": "Delivery", "note": "a=b"}
 
-    assert CliRunner().invoke(cli_app, ["run", "scorer", "hi", "--var", "area"]).exit_code != 0
+    assert CliRunner().invoke(cli_app, ["run", "scorer", "--input", "area"]).exit_code != 0
 
 
 async def test_a_trace_records_which_variables_were_filled_but_not_their_values(tmp_path):
@@ -498,10 +494,10 @@ async def test_a_trace_records_which_variables_were_filled_but_not_their_values(
         agent_key="scorer",
         environment="dev",
         context=context,
-        prompt_variables={"candidate_profile": "Ada Lovelace"},
+        inputs={"candidate_profile": "Ada Lovelace"},
     )
 
-    assert context.trace_metadata["prompt_variables"] == ["area", "candidate_profile"]
+    assert context.trace_metadata["inputs"] == ["area", "candidate_profile"]
     assert len(context.trace_metadata["instructions_digest"]) == 12
     assert "Ada Lovelace" not in json.dumps(context.trace_metadata)
 
@@ -532,7 +528,7 @@ async def test_a_sub_agent_is_filled_by_its_own_definition_only(tmp_path):
         agent_key="parent",
         environment="dev",
         context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
-        prompt_variables={"area": "Delivery"},
+        inputs={"area": "Delivery"},
     )
     assert built.agent.instructions == "You lead Delivery."
 
@@ -564,7 +560,7 @@ async def test_a_sub_agent_whose_definition_leaves_a_value_unset_is_refused(tmp_
             agent_key="parent",
             environment="dev",
             context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
-            prompt_variables={"topic": "ignored"},
+            inputs={"topic": "ignored"},
         )
 
 
@@ -586,3 +582,46 @@ async def test_what_a_request_may_fill_is_what_is_left_unanswered(tmp_path):
         await provider.resolve(ref, {"unknown": "x"})
 
     assert (await provider.resolve(ref, {"candidate_profile": "Ada"})).messages[0].content == "Profile: Ada"
+
+
+# ----- naming a run --------------------------------------------------------------------
+
+
+async def test_a_run_is_named_after_its_agent_unless_the_caller_says_otherwise(tmp_path, monkeypatch):
+    from agents import Runner
+
+    config = AgentConfig(
+        name="Scorer",
+        prompt=PromptRef(name="scorer", variables={"area": "Delivery", "candidate_profile": "Ada"}),
+        model={"provider": "openai", "name": "gpt-5-nano"},
+    )
+    runtime = _runtime(file_prompts(tmp_path), config)
+    monkeypatch.setattr(Runner, "run", AsyncMock(return_value=SimpleNamespace(final_output="done")))
+    context = RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1")
+
+    default = await runtime.run(agent_key="scorer", environment="dev", context=context)
+    assert default.run_name == "agent:scorer"
+
+    named = await runtime.run(agent_key="scorer", environment="dev", run_name="scorer-Delivery", context=context)
+    assert named.run_name == "scorer-Delivery"
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["", "   ", "agent:payroll-approver", "x" * 201, "scorer\x1b[2Jwiped", "scor​er"],
+)
+async def test_a_run_name_that_cannot_be_trusted_is_refused(tmp_path, name):
+    """The name is what a person and an evaluation harness read to know which run this was."""
+    config = AgentConfig(
+        name="Scorer",
+        prompt=PromptRef(name="scorer", variables={"area": "D", "candidate_profile": "A"}),
+        model={"provider": "openai", "name": "gpt-5-nano"},
+    )
+    runtime = _runtime(file_prompts(tmp_path), config)
+    with pytest.raises(RunInputError):
+        await runtime.run(
+            agent_key="scorer",
+            environment="dev",
+            run_name=name,
+            context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
+        )

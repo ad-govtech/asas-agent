@@ -75,8 +75,8 @@ class Settings(BaseSettings):
     # Limits applied on top of whatever a definition asks for
     max_turns_ceiling: int = Field(default=20, ge=1, alias="ASAS_MAX_TURNS_CEILING")
     timeout_ceiling_seconds: int = Field(default=300, ge=1, alias="ASAS_TIMEOUT_CEILING")
-    #: Caller-supplied prompt variables reach the system instructions, which are re-sent every turn.
-    prompt_variables_max_bytes: int = Field(default=256_000, ge=1, alias="ASAS_PROMPT_VARIABLES_MAX_BYTES")
+    #: A caller's inputs reach the system instructions, which are re-sent every turn.
+    inputs_max_bytes: int = Field(default=256_000, ge=1, alias="ASAS_INPUTS_MAX_BYTES")
 
     @field_validator("database_url")
     @classmethod

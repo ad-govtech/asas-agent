@@ -35,11 +35,14 @@ class ExecutionContext(BaseModel):
 class AgentRunRequest(BaseModel):
     agent_key: str
     environment: str = "production"
-    input: str = ""
-    context: dict[str, Any] = Field(default_factory=dict, description="Facts the business service already loaded.")
-    prompt_variables: dict[str, Any] = Field(
+    inputs: dict[str, Any] = Field(
         default_factory=dict,
-        description="Values for this request's `{{placeholders}}`, on top of the ones the definition sets.",
+        description="Values for the `{{placeholders}}` the prompt asks for and the definition has not set.",
+    )
+    message: str = Field(default="", description="What the caller is saying to the agent, if anything.")
+    run_name: str | None = Field(
+        default=None,
+        description="What to call this run in the trace, for telling apart many runs of one agent.",
     )
     execution: ExecutionContext
 
@@ -50,6 +53,7 @@ class AgentRunResponse(BaseModel):
     agent_version: int
     prompt_version: int | None
     trace_id: str | None
+    run_name: str
     toolset: list[str]
 
 
@@ -111,9 +115,9 @@ def create_app(platform: Platform | None = None) -> FastAPI:
             result = await platform.runtime.run(
                 agent_key=request.agent_key,
                 environment=request.environment,
-                user_input=request.input,
-                business_context=request.context,
-                prompt_variables=request.prompt_variables,
+                inputs=request.inputs,
+                message=request.message,
+                run_name=request.run_name,
                 context=context,
             )
         except RegistryError as exc:
@@ -138,6 +142,7 @@ def create_app(platform: Platform | None = None) -> FastAPI:
             agent_version=result.agent_version,
             prompt_version=result.prompt_version,
             trace_id=result.trace_id,
+            run_name=result.run_name,
             toolset=result.toolset,
         )
 

@@ -23,11 +23,13 @@ from asas_agent.registry.schema import PromptMessageRef, PromptRef
 #: `{{ name }}`, the placeholder syntax Langfuse uses.
 _OPENING, _CLOSING = "{{", "}}"
 
-#: Roles a prompt may use. `system` and `developer` become instructions.
-INSTRUCTION_ROLES = ("system", "developer")
-MESSAGE_ROLES = ("user", "assistant")
+#: The two roles a prompt may use. The system message instructs the agent; the
+#: user message opens the run. Nothing observed in a real product needs more,
+#: and a shape this narrow is one a reader can hold in their head.
+INSTRUCTION_ROLES = ("system",)
+MESSAGE_ROLES = ("user",)
 
-Role = Literal["system", "developer", "user", "assistant"]
+Role = Literal["system", "user"]
 
 
 class PromptError(RuntimeError):
@@ -182,24 +184,23 @@ def render(template: PromptTemplate, variables: dict[str, Any]) -> ResolvedPromp
 def _split(
     template: PromptTemplate, messages: tuple[PromptMessage, ...], filled: tuple[str, ...] = ()
 ) -> ResolvedPrompt:
-    """System and developer messages instruct the agent; user and assistant messages open the run."""
-    instructions = "\n\n".join(m.content for m in messages if m.role in INSTRUCTION_ROLES and m.content.strip())
-    opening = tuple(m for m in messages if m.role in MESSAGE_ROLES)
+    """A prompt is one system message, and at most one user message after it.
 
-    if not any(m.role in INSTRUCTION_ROLES for m in messages):
+    The system message becomes the agent's instructions; the user message, if
+    there is one, opens the run. Anything else is refused at publication, where
+    it is a definition to fix rather than a run to debug.
+    """
+    shape = [m.role for m in messages]
+    if shape not in (["system"], ["system", "user"]):
         raise PromptShapeError(
-            f"Prompt {template.name!r} has no system message, so the agent would have no instructions."
+            f"Prompt {template.name!r} is {' + '.join(shape) or 'empty'}. "
+            "A prompt is one system message, optionally followed by one user message."
         )
-    if not instructions:
+    if not messages[0].content.strip():
         raise PromptShapeError(f"Prompt {template.name!r} has a system message, but it is empty.")
 
-    first_message = next((i for i, m in enumerate(messages) if m.role in MESSAGE_ROLES), len(messages))
-    trailing = [m.role for m in messages[first_message:] if m.role in INSTRUCTION_ROLES]
-    if trailing:
-        raise PromptShapeError(
-            f"Prompt {template.name!r} puts a {trailing[0]} message after a user or assistant message. "
-            "Instructions are hoisted out of the conversation, so write them first."
-        )
+    instructions = messages[0].content
+    opening = tuple(messages[1:])
 
     return ResolvedPrompt(
         name=template.name,

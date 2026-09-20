@@ -57,3 +57,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# The examples are part of what is tested, and they are imported by their
+# package path. `python -m pytest` adds the repository root and the `pytest`
+# entry point does not, so say it here and both work.
+pythonpath = ["."]

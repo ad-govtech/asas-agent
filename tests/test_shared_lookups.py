@@ -281,7 +281,7 @@ async def test_a_platform_runs_its_agents_through_the_shared_lookup(monkeypatch)
                 platform.runtime.run(
                     agent_key="scorer",
                     environment="dev",
-                    user_input="hi",
+                    message="hi",
                     context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
                 )
                 for _ in range(4)

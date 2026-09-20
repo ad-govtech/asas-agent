@@ -142,7 +142,9 @@ async def run(request: RunRequest) -> dict[str, Any]:
     has_key = bool(_platform.settings.openai_api_key or _platform.settings.gateway_api_key)
 
     if not has_key:
-        prompt = await _platform.prompts.resolve(definition.config.prompt)
+        # The same inputs the real run would send, so the sample path resolves
+        # the same prompt rather than one missing a value.
+        prompt = await _platform.prompts.resolve(definition.config.prompt, {"case": context_facts})
         return {
             "mode": "sample",
             "output": sample_output(definition.config.output.schema_key, request.scenario_id),
@@ -164,8 +166,8 @@ async def run(request: RunRequest) -> dict[str, Any]:
     result = await _platform.runtime.run(
         agent_key=request.agent_key,
         environment=ENVIRONMENT,
-        user_input=request.request,
-        business_context=context_facts,
+        inputs={"case": context_facts},
+        message=request.request,
         context=runtime_context,
     )
 

@@ -9,3 +9,7 @@ with residents directly, say that professional Arabic is required.
 
 A hiring manager edits what you produce, so leave anything uncertain out
 rather than guessing.
+
+The case:
+
+{{case}}

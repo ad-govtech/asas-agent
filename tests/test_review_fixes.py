@@ -191,7 +191,7 @@ async def test_direct_runtime_merges_dependencies_and_clamps_limits(settings, mo
     run = AsyncMock(return_value=SimpleNamespace(final_output="done"))
     monkeypatch.setattr(Runner, "run", run)
     try:
-        await platform.runtime.run(agent_key="test", environment="dev", user_input="hi", context=request_context)
+        await platform.runtime.run(agent_key="test", environment="dev", message="hi", context=request_context)
         actual = run.call_args.kwargs
         assert actual["max_turns"] == 2
         assert actual["context"].dependency("service") == "request"
@@ -236,7 +236,7 @@ async def test_runtime_deadline_cancels_pending_work(settings, monkeypatch, phas
     try:
         with pytest.raises(TimeoutError):
             await platform.runtime.run(
-                agent_key="test", environment="dev", user_input="hi", context=context(timeout_seconds=0.02)
+                agent_key="test", environment="dev", message="hi", context=context(timeout_seconds=0.02)
             )
         assert cancelled.is_set()
     finally:
@@ -305,7 +305,7 @@ async def test_trace_flush_runs_off_event_loop(settings):
 
     platform.runtime._tracer = Tracer()
     try:
-        async with platform.runtime._trace("test", context()):
+        async with platform.runtime._trace("test", "test", context()):
             pass
         assert flushed and flushed[0] != main_thread
     finally:
@@ -332,7 +332,7 @@ async def test_definition_deadline_and_child_timeout_cancel_runs(settings, monke
     monkeypatch.setattr(platform.repository, "get_active", get_active)
     try:
         with pytest.raises(TimeoutError):
-            await platform.runtime.run(agent_key="child", environment="dev", user_input="hi", context=context())
+            await platform.runtime.run(agent_key="child", environment="dev", message="hi", context=context())
         assert cancelled.is_set()
         cancelled.clear()
         built = await platform.runtime.factory.build(agent_key="parent", environment="dev", context=context())
@@ -351,7 +351,7 @@ async def test_cancelled_trace_does_not_wait_for_flush(settings):
     try:
         with pytest.raises(TimeoutError):
             async with asyncio.timeout(0.01):
-                async with platform.runtime._trace("test", context()):
+                async with platform.runtime._trace("test", "test", context()):
                     await asyncio.Event().wait()
         tracer.flush.assert_not_called()
     finally:
@@ -434,9 +434,7 @@ async def test_real_runtime_stops_tool_loop_at_platform_ceiling(settings, monkey
     )
     try:
         with pytest.raises(MaxTurnsExceeded):
-            await platform.runtime.run(
-                agent_key="test", environment="dev", user_input="hi", context=context(max_turns=20)
-            )
+            await platform.runtime.run(agent_key="test", environment="dev", message="hi", context=context(max_turns=20))
         assert model.calls == 2
         assert seen == ["registered", "registered"]
     finally:
@@ -468,7 +466,7 @@ async def test_definition_deadline_also_bounds_prompt_resolution(settings, monke
     monkeypatch.setattr(Runner, "run", run)
     try:
         with pytest.raises(TimeoutError):
-            await platform.runtime.run(agent_key="test", environment="dev", user_input="hi", context=context())
+            await platform.runtime.run(agent_key="test", environment="dev", message="hi", context=context())
         assert cancelled.is_set()
         run.assert_not_called()
     finally:

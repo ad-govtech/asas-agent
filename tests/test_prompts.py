@@ -53,7 +53,7 @@ async def test_default_platform_runs_without_langfuse(settings, monkeypatch):
         result = await platform.runtime.run(
             agent_key="test",
             environment="dev",
-            user_input="hello",
+            message="hello",
             context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
         )
         assert result.output == "done"
