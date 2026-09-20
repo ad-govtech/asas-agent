@@ -133,6 +133,19 @@ Values render as Langfuse renders them: `str(value)`, and nothing at all for `No
 
 A sub-agent is filled from the same request variables as its parent, minus any its own definition already sets. Its prompt may not carry user or assistant messages, because a sub-agent is handed its caller's input and has nowhere to put them; that is refused at build time rather than dropped. `user_input` and `context` still work with a chat prompt and arrive as a JSON message after the prompt's own, but only when the caller sends them.
 
+## What a run reuses
+
+A fan-out - one call per rubric area, one per candidate in a batch - starts dozens of runs in the same second, and each one has to know which version its environment is bound to. That question is answered from memory:
+
+- **Which version an environment runs** is reused for `ASAS_DEFINITION_CACHE_SECONDS` (5 by default). That binding is what promotion and rollback move, so the window is what a rollback takes to reach a process that is already running, with no deployment.
+- Runs that start together **share one query**: forty concurrent runs ask the registry once, not forty times. A run that hits its deadline and walks away leaves the answer behind for the others.
+- A promotion made **through this process** drops what it affects at once, and a query already in flight when it lands is not allowed to put the old version back.
+- Each run is handed **its own copy** of the definition, so one run cannot change what another reads.
+
+`ASAS_DEFINITION_CACHE_SECONDS=0` asks the registry on every run; concurrent runs still share one query, since they are asking the same question at the same moment.
+
+Prompts are cached too: Langfuse's SDK keeps them for 60 seconds, and a prompt file is re-read once it changes on disk. A replacement that preserves the file's timestamp and size (`cp -p`, `rsync -a`, a restored backup) looks unchanged, so restart after one.
+
 ## Rules the package enforces
 
 - Configuration names capabilities; it never carries code, SQL, URLs or secrets.
@@ -199,6 +212,8 @@ Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to t
 | `ASAS_PROMPT_DIR` | Prompt folder for file drafts (default: `prompts`) |
 | `ASAS_TRACING_PROVIDER` | `none` (default) or `langfuse`, independent of prompts |
 | `ASAS_PROMPT_VARIABLES_MAX_BYTES` | Ceiling on a request's prompt variables (default: 256000) |
+| `ASAS_DEFINITION_CACHE_SECONDS` | How long a run may reuse an environment binding, and so how quickly a rollback lands (default: 5; 0 disables) |
+| `ASAS_DEFINITION_CACHE_SIZE` | How many agent/environment pairs to keep (default: 256) |
 | `ASAS_TRACING` | Set `false` to disable tracing regardless of provider |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` | Prompts and traces |
 | `OPENAI_API_KEY` | OpenAI models |
