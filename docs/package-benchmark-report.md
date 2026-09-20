@@ -121,10 +121,12 @@ pin.
 
 ## Reproducing this
 
-The application is at `cv-review/` outside this repository: `cv_review/` for the
-three agents and the CLI, `agents/` and `prompts/agents/` for the definitions
-and prompts, `fixtures/cvs/` for the five CVs, `model_server.py` for the
-deterministic endpoint, and `scenarios.py` for all eight scenarios.
+This benchmark ran against an earlier three-agent application. That directory
+has since been rebuilt to the CV review CLI's own requirements and published as
+[ad-govtech/cv-review](https://github.com/ad-govtech/cv-review); the shape
+measured here - one agent invocation per step, a fan-out over candidates - is
+the same, and the current application's own benchmark is in
+[cv-review-report.md](cv-review-report.md).
 
 ```bash
 docker compose up -d postgres            # in the asas-agent checkout
