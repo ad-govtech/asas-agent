@@ -63,22 +63,18 @@ The original engineering guideline uses Langfuse as its reference deployment. Th
 
 Langfuse remains available through the `langfuse` extra (or `tracing` for span instrumentation). `LANGFUSE_HOST` selects a self-hosted/internal instance or Cloud, using that instance's project keys. `ASAS_TRACING_PROVIDER` chooses `none` or `langfuse` independently of `ASAS_PROMPT_PROVIDER`. See the README for deployment and migration settings.
 
-## Upgrading a registry written by a pre-release build
+## The supported starting format
 
-A prompt snapshot stores the template as written, placeholders included, and the definition's variables beside it. A pre-release build stored *rendered* text instead and dropped the variables. Nothing in the row says which build wrote it, and a date does not settle it either: an old binary can publish today.
+A prompt snapshot stores the template as written, placeholders included, with the definition's variables beside it. That is the only format this package supports, and there is nothing to migrate from: no environment has ever run a build that published definitions, and the development databases that did are disposable.
 
-So the question is answered from deployment history, not from a query. Inventory every snapshot-bearing row:
+An earlier development build stored *rendered* text instead and dropped the variables. Nothing in a row says which build wrote it - not even the date, since an old binary can publish at any time - so a local database that predates this format is recreated rather than inspected:
 
-```sql
-SELECT agent_key, version, status, published_at, created_by
-FROM agent_definitions
-WHERE config->'prompt' ? 'snapshot' OR config->'prompt' ? 'snapshot_messages'
-ORDER BY agent_key, version;
+```bash
+docker compose down -v && docker compose up -d postgres
+asas-agent migrate
 ```
 
-Then, for each row, establish which build published it. If every one was published by a build that stores templates, the current format is the supported starting point. If any was published by an earlier build, republish that agent from the current build - a published version is immutable, so it is a new version, not an edit, and republishing with the old binary would only write the old format again.
-
-A rendered snapshot read as a template either demands a value for a placeholder that used to be literal text, or substitutes a request's data into it. Both are loud rather than silent, but both are wrong.
+If that assumption is ever wrong for some registry, the symptom is loud rather than silent: a rendered snapshot read as a template demands a value for a placeholder that used to be literal text. The fix is to publish a new version from a current build, because a published version is immutable.
 
 ## Divergences from the engineering guideline
 
