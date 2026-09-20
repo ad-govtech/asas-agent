@@ -15,13 +15,11 @@
     "policy.search",
     "case.history"
   ],
-  "sub_agents": [],
   "runtime": {
     "max_turns": 6,
     "timeout_seconds": 30
   },
   "output": {
     "schema": "customer_advice_v1"
-  },
-  "guardrails": []
+  }
 }

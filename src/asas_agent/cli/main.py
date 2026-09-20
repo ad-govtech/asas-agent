@@ -394,11 +394,14 @@ def serve(
 ) -> None:
     """Start the runtime API. Needs the `server` extra."""
     try:
+        # Both: the Agents SDK brings uvicorn in for MCP, so its presence
+        # proves nothing about whether the server extra was installed.
+        import fastapi  # noqa: F401
         import uvicorn
     except ImportError as exc:
         raise typer.BadParameter(
             'Serving the runtime over HTTP needs the server extra: uv pip install "asas-agent[server]". '
-            "An application that embeds the runtime does not need it."
+            f"An application that embeds the runtime does not need it. Missing: {exc.name}."
         ) from exc
 
     settings = get_settings()
