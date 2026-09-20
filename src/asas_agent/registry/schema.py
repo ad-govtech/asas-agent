@@ -40,8 +40,6 @@ class PromptRef(BaseModel):
     version: int | None = None
     label: str | None = None
     variables: dict[str, Any] = Field(default_factory=dict)
-    #: The names a request may fill. `None` means any name the definition does not set.
-    request_variables: list[str] | None = None
     snapshot: str | None = None
     snapshot_messages: list[PromptMessageRef] | None = None
 

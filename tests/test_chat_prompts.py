@@ -272,54 +272,24 @@ async def test_the_runtime_passes_request_variables_through_to_the_prompt(monkey
 # ----- sub-agents ---------------------------------------------------------------------
 
 
-async def test_a_sub_agents_prompt_is_filled_from_the_same_request_variables(tmp_path):
-    """The parent received the values; its specialists must not fail for want of them."""
-    (tmp_path / "specialist.chat.json").write_text(
-        json.dumps([{"role": "system", "content": "You advise on {{area}}."}])
-    )
-    provider = file_prompts(tmp_path)
-
-    configs = {
-        "scorer": AgentConfig(
-            name="Scorer",
-            prompt=PromptRef(name="scorer"),
-            model={"provider": "openai", "name": "gpt-5-nano"},
-            sub_agents=[{"agent_key": "specialist", "environment": "dev", "mode": "tool"}],
-        ),
-        "specialist": AgentConfig(
-            name="Specialist",
-            prompt=PromptRef(name="specialist"),
-            model={"provider": "openai", "name": "gpt-5-nano"},
-        ),
-    }
-
-    runtime = _runtime(provider, configs["scorer"])
-    runtime.factory.repository = _configured_repository(configs)
-
-    built = await runtime.factory.build(
-        agent_key="scorer",
-        environment="dev",
-        context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
-        prompt_variables={"area": "Delivery", "candidate_profile": "Ada"},
-    )
-    assert built.agent.instructions == "You score Delivery."
-
-
 async def test_a_sub_agent_whose_chat_prompt_has_messages_is_refused(tmp_path):
     """A sub-agent is handed its caller's input, so its own messages would be dropped in silence."""
     (tmp_path / "parent.chat.json").write_text(json.dumps([{"role": "system", "content": "You lead."}]))
-    provider = file_prompts(tmp_path)  # `scorer` carries a user message.
+    (tmp_path / "specialist.chat.json").write_text(
+        json.dumps([{"role": "system", "content": "You advise."}, {"role": "user", "content": "Go ahead."}])
+    )
+    provider = file_prompts(tmp_path)
 
     configs = {
         "parent": AgentConfig(
             name="Parent",
             prompt=PromptRef(name="parent"),
             model={"provider": "openai", "name": "gpt-5-nano"},
-            sub_agents=[{"agent_key": "scorer", "environment": "dev", "mode": "tool"}],
+            sub_agents=[{"agent_key": "specialist", "environment": "dev", "mode": "tool"}],
         ),
-        "scorer": AgentConfig(
-            name="Scorer",
-            prompt=PromptRef(name="scorer"),
+        "specialist": AgentConfig(
+            name="Specialist",
+            prompt=PromptRef(name="specialist"),
             model={"provider": "openai", "name": "gpt-5-nano"},
         ),
     }
@@ -331,7 +301,6 @@ async def test_a_sub_agent_whose_chat_prompt_has_messages_is_refused(tmp_path):
             agent_key="parent",
             environment="dev",
             context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
-            prompt_variables={"area": "Delivery", "candidate_profile": "Ada"},
         )
 
 
@@ -449,47 +418,6 @@ async def test_a_chat_prompt_file_wins_over_a_text_file_of_the_same_name(tmp_pat
 # ----- what a request may fill ---------------------------------------------------------
 
 
-async def test_a_definition_can_list_the_variables_a_request_may_fill(tmp_path):
-    provider = file_prompts(tmp_path)
-    ref = PromptRef(name="scorer", variables={"area": "Delivery"}, request_variables=["candidate_profile"])
-
-    assert (await provider.resolve(ref, {"candidate_profile": "Ada"})).messages[0].content == "Profile: Ada"
-
-    with pytest.raises(PromptVariableError, match="does not accept tone"):
-        await provider.resolve(ref, {"candidate_profile": "Ada", "tone": "casual"})
-
-
-async def test_a_sub_agents_own_variables_are_not_a_collision_with_the_parents_request(tmp_path):
-    """The caller addressed the parent and cannot know what a specialist reserves."""
-    (tmp_path / "specialist.chat.json").write_text(
-        json.dumps([{"role": "system", "content": "Advise on {{area}}, {{tone}}."}])
-    )
-    configs = {
-        "scorer": AgentConfig(
-            name="Scorer",
-            prompt=PromptRef(name="scorer"),
-            model={"provider": "openai", "name": "gpt-5-nano"},
-            sub_agents=[{"agent_key": "specialist", "environment": "dev", "mode": "tool"}],
-        ),
-        "specialist": AgentConfig(
-            name="Specialist",
-            prompt=PromptRef(name="specialist", variables={"tone": "formal"}),
-            model={"provider": "openai", "name": "gpt-5-nano"},
-        ),
-    }
-    runtime = _runtime(file_prompts(tmp_path), configs["scorer"])
-    runtime.factory.repository = _configured_repository(configs)
-
-    built = await runtime.factory.build(
-        agent_key="scorer",
-        environment="dev",
-        context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
-        # `tone` is meant for something else; the specialist keeps its own.
-        prompt_variables={"area": "Delivery", "candidate_profile": "Ada", "tone": "casual"},
-    )
-    assert built.agent.instructions == "You score Delivery."
-
-
 async def test_prompt_variables_larger_than_the_ceiling_are_refused(tmp_path):
     runtime = _runtime(file_prompts(tmp_path), None)
     runtime.prompt_variables_max_bytes = 100
@@ -578,90 +506,83 @@ async def test_a_trace_records_which_variables_were_filled_but_not_their_values(
     assert "Ada Lovelace" not in json.dumps(context.trace_metadata)
 
 
-async def test_publishing_keeps_the_names_a_request_may_fill(tmp_path):
-    """An allowlist lost at publication would publish as "any name is allowed"."""
-    provider = file_prompts(tmp_path)
-    ref = PromptRef(name="scorer", variables={"area": "Delivery"}, request_variables=["candidate_profile"])
-
-    pinned = await pin_prompt(ref, provider)
-    assert pinned.request_variables == ["candidate_profile"]
-
-    restored = PromptRef.model_validate_json(pinned.model_dump_json())
-    assert (await provider.resolve(restored, {"candidate_profile": "Ada"})).messages[0].content == "Profile: Ada"
-    with pytest.raises(PromptVariableError, match="does not accept tone"):
-        await provider.resolve(restored, {"candidate_profile": "Ada", "tone": "casual"})
-
-
-async def test_publishing_keeps_an_allowlist_that_accepts_nothing(tmp_path):
-    """`[]` means "a request fills nothing"; `None` means "anything the definition leaves open"."""
-    provider = file_prompts(tmp_path, [{"role": "system", "content": "You score {{area}}."}])
-    ref = PromptRef(name="scorer", variables={"area": "Delivery"}, request_variables=[])
-
-    pinned = await pin_prompt(ref, provider)
-    assert pinned.request_variables == []
-
-    with pytest.raises(PromptVariableError, match="accepts: nothing"):
-        await provider.resolve(pinned, {"candidate_profile": "Ada"})
-
-
-async def test_publishing_a_langfuse_prompt_keeps_its_allowlist_too():
-    provider = LangfusePrompts(chat_client())
-    pinned = await pin_prompt(PromptRef(name="scorer", request_variables=["candidate_profile"]), provider)
-    assert (pinned.version, pinned.request_variables) == (7, ["candidate_profile"])
-
-
-async def test_a_value_a_sub_agent_does_not_accept_is_dropped_not_refused(tmp_path):
-    """The caller addressed the parent; a specialist's narrower allowlist is its own business."""
+async def test_a_sub_agent_is_filled_by_its_own_definition_only(tmp_path):
+    """Nothing is forwarded: the caller addressed the parent and cannot know what a specialist needs."""
+    (tmp_path / "parent.chat.json").write_text(json.dumps([{"role": "system", "content": "You lead {{area}}."}]))
     (tmp_path / "specialist.chat.json").write_text(
-        json.dumps([{"role": "system", "content": "Advise on {{candidate_profile}}."}])
+        json.dumps([{"role": "system", "content": "You advise on {{topic}}."}])
     )
     configs = {
-        "scorer": AgentConfig(
-            name="Scorer",
-            prompt=PromptRef(name="scorer", request_variables=["area", "candidate_profile", "locale"]),
+        "parent": AgentConfig(
+            name="Parent",
+            prompt=PromptRef(name="parent"),
             model={"provider": "openai", "name": "gpt-5-nano"},
             sub_agents=[{"agent_key": "specialist", "environment": "dev", "mode": "tool"}],
         ),
         "specialist": AgentConfig(
             name="Specialist",
-            prompt=PromptRef(name="specialist", request_variables=["candidate_profile"]),
+            prompt=PromptRef(name="specialist", variables={"topic": "delivery risk"}),
             model={"provider": "openai", "name": "gpt-5-nano"},
         ),
     }
-    runtime = _runtime(file_prompts(tmp_path), configs["scorer"])
+    runtime = _runtime(FilePrompts(tmp_path), configs["parent"])
     runtime.factory.repository = _configured_repository(configs)
 
     built = await runtime.factory.build(
-        agent_key="scorer",
+        agent_key="parent",
         environment="dev",
         context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
-        prompt_variables={"area": "Delivery", "candidate_profile": "Ada", "locale": "en"},
+        prompt_variables={"area": "Delivery"},
     )
-    assert built.agent.instructions == "You score Delivery."
+    assert built.agent.instructions == "You lead Delivery."
 
 
-async def test_a_sub_agent_that_accepts_nothing_from_a_request_still_builds(tmp_path):
-    (tmp_path / "specialist.chat.json").write_text(json.dumps([{"role": "system", "content": "Advise plainly."}]))
+async def test_a_sub_agent_whose_definition_leaves_a_value_unset_is_refused(tmp_path):
+    """Better a clear failure at build than a `{{topic}}` in the specialist's instructions."""
+    (tmp_path / "parent.chat.json").write_text(json.dumps([{"role": "system", "content": "You lead."}]))
+    (tmp_path / "specialist.chat.json").write_text(
+        json.dumps([{"role": "system", "content": "You advise on {{topic}}."}])
+    )
     configs = {
-        "scorer": AgentConfig(
-            name="Scorer",
-            prompt=PromptRef(name="scorer"),
+        "parent": AgentConfig(
+            name="Parent",
+            prompt=PromptRef(name="parent"),
             model={"provider": "openai", "name": "gpt-5-nano"},
             sub_agents=[{"agent_key": "specialist", "environment": "dev", "mode": "tool"}],
         ),
         "specialist": AgentConfig(
             name="Specialist",
-            prompt=PromptRef(name="specialist", request_variables=[]),
+            prompt=PromptRef(name="specialist"),
             model={"provider": "openai", "name": "gpt-5-nano"},
         ),
     }
-    runtime = _runtime(file_prompts(tmp_path), configs["scorer"])
+    runtime = _runtime(FilePrompts(tmp_path), configs["parent"])
     runtime.factory.repository = _configured_repository(configs)
 
-    built = await runtime.factory.build(
-        agent_key="scorer",
-        environment="dev",
-        context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
-        prompt_variables={"area": "Delivery", "candidate_profile": "Ada"},
-    )
-    assert built.agent.instructions == "You score Delivery."
+    with pytest.raises(PromptVariableError, match="topic"):
+        await runtime.factory.build(
+            agent_key="parent",
+            environment="dev",
+            context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
+            prompt_variables={"topic": "ignored"},
+        )
+
+
+@pytest.mark.parametrize("provider_name", ["langfuse", "file"])
+async def test_a_value_the_prompt_does_not_ask_for_is_refused(tmp_path, provider_name):
+    """It would not reach the model, so sending it is a mistake, not a no-op."""
+    provider = LangfusePrompts(chat_client()) if provider_name == "langfuse" else file_prompts(tmp_path)
+    ref = PromptRef(name="scorer", variables={"area": "Delivery"})
+
+    with pytest.raises(PromptVariableError, match="does not use tone"):
+        await provider.resolve(ref, {"candidate_profile": "Ada", "tone": "casual"})
+
+
+async def test_what_a_request_may_fill_is_what_is_left_unanswered(tmp_path):
+    provider = file_prompts(tmp_path)
+    ref = PromptRef(name="scorer", variables={"area": "Delivery"})
+
+    with pytest.raises(PromptVariableError, match="asks for: candidate_profile"):
+        await provider.resolve(ref, {"unknown": "x"})
+
+    assert (await provider.resolve(ref, {"candidate_profile": "Ada"})).messages[0].content == "Profile: Ada"

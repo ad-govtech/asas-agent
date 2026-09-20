@@ -26,8 +26,8 @@ The runtime holds no business state and no session. Anything durable lives in Po
 | Prompts | File drafts with registry snapshots, or optional Langfuse | Developers choose whether to operate a separate prompt service |
 | Prompt pinning | Publishing stores the file template or pins a Langfuse version | `customer-advisor v2` always means the same thing |
 | Prompt shape | Text or chat; system messages instruct, the rest open the run | The prompt author places each fact, instead of the runtime handing the model one JSON blob |
-| Prompt variables | The definition's values publish with the agent; the request's arrive per call | A request's data cannot be frozen into a version; substitution happens once |
-| Caching | Definitions by agent and environment, for a few seconds, with concurrent runs sharing one query | A fan-out asks the registry once; a rollback still lands without a deployment |
+| Prompt variables | The definition's values publish with the agent; the request's arrive per call, and are what the prompt asks for | A request's data cannot be frozen into a version, and what it may fill needs no configuration |
+| Shared lookups | Runs asking at the same moment share one query; nothing is kept afterwards | A fan-out asks the registry once, and a promotion is visible to the next run |
 | Tools | Named in configuration, implemented in the app | The database never carries code, URLs or credentials |
 | Action tools | Refused unless the caller enables them | An LLM naming a tool is not authorization |
 | Models | Registry of providers, with a capability table | A model that cannot call tools is refused at publish, not mid-run |

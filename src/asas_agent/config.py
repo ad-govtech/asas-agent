@@ -78,12 +78,6 @@ class Settings(BaseSettings):
     #: Caller-supplied prompt variables reach the system instructions, which are re-sent every turn.
     prompt_variables_max_bytes: int = Field(default=256_000, ge=1, alias="ASAS_PROMPT_VARIABLES_MAX_BYTES")
 
-    # How long a run may reuse the version an environment is bound to. This is
-    # how quickly a promotion or a rollback reaches a running process. 0 reads
-    # the registry on every run.
-    definition_cache_seconds: float = Field(default=5.0, ge=0, alias="ASAS_DEFINITION_CACHE_SECONDS")
-    definition_cache_size: int = Field(default=256, ge=1, alias="ASAS_DEFINITION_CACHE_SIZE")
-
     @field_validator("database_url")
     @classmethod
     def _normalize(cls, value: str) -> str:
