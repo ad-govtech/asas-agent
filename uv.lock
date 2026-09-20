@@ -95,7 +95,7 @@ requires-dist = [
     { name = "langfuse", marker = "extra == 'tracing'", specifier = ">=3.7,<4" },
     { name = "openai", specifier = ">=2.29,<2.30" },
     { name = "openai-agents", specifier = ">=0.8,<0.9" },
-    { name = "openinference-instrumentation-openai-agents", marker = "extra == 'tracing'", specifier = ">=0.1.20" },
+    { name = "openinference-instrumentation-openai-agents", marker = "extra == 'tracing'", specifier = ">=0.1.20,<2" },
     { name = "pydantic", specifier = ">=2.11,<3" },
     { name = "pydantic-settings", specifier = ">=2.6,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
@@ -1080,7 +1080,7 @@ wheels = [
 
 [[package]]
 name = "openinference-instrumentation-openai-agents"
-version = "2.4.1"
+version = "1.6.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "openinference-instrumentation" },
@@ -1091,9 +1091,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c7/1a/5493d664baf3893f68c3441b5e7291c2f027f63d3d5d4f58e28389529419/openinference_instrumentation_openai_agents-2.4.1.tar.gz", hash = "sha256:4bcfe61d39ba914b510832096af7030472fbac0df66854bd116f60f67642adee", size = 35334, upload-time = "2026-09-10T05:43:20.312Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e1/f1/8d97d6c859854f6d5546af805185a03376604d73d744e90b3308eaddd9bb/openinference_instrumentation_openai_agents-1.6.2.tar.gz", hash = "sha256:efffff2606e552b6cb8481c6e5738b8c104b6e6e72ead13773ee5b0bdc86aabd", size = 26586, upload-time = "2026-07-30T16:38:28.049Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/08/65ea6e5dd68ba810e33a5c60673764efa65ddb5409807862acb5b3a2504a/openinference_instrumentation_openai_agents-2.4.1-py3-none-any.whl", hash = "sha256:c43857c9738bc785ab482d91644e0dde5be9275e3038a2000b85b3a8e1d38237", size = 38508, upload-time = "2026-09-10T05:43:18.828Z" },
+    { url = "https://files.pythonhosted.org/packages/26/15/2f6f3890675c626eeac81ce7994f7762bb25c3a3a4a5b00e41e712c3fd47/openinference_instrumentation_openai_agents-1.6.2-py3-none-any.whl", hash = "sha256:0d9fcf4cb24dd22c57ed035f31c807135fbccc67347e11cfdc01b39e835d35d9", size = 28995, upload-time = "2026-07-30T16:38:26.879Z" },
 ]
 
 [[package]]

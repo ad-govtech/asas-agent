@@ -197,7 +197,7 @@ ASAS_TRACING_PROVIDER=none
 
 The application must be able to reach that URL. For Langfuse Cloud, use `https://cloud.langfuse.com` (or your region's endpoint) and that project's keys.
 
-Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to the configured instance, including when prompts use files. `none` disables runtime tracing, including the Agents SDK's built-in trace export. `ASAS_TRACING=false` overrides the provider and disables tracing. There is no silent fallback when an explicitly selected provider is unavailable.
+Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to the configured instance, including when prompts use files. `none` disables runtime tracing, including the Agents SDK's built-in trace export. Choosing an internal backend never leaves an external one installed: if the span instrumentation is missing, or refuses to attach to the installed SDK version, the SDK's own exporter is removed rather than left pointing at OpenAI. `ASAS_TRACING=false` overrides the provider and disables tracing. There is no silent fallback when an explicitly selected provider is unavailable.
 
 **Existing deployments:** set `ASAS_PROMPT_PROVIDER=langfuse` explicitly and install the extra to retain Langfuse prompts. Set `ASAS_TRACING_PROVIDER=langfuse` to retain tracing. Previously published file definitions are not rewritten: they continue reading files until replaced by a newly published version. Switching providers does not convert existing Langfuse version references; create new drafts referencing files to migrate those agents.
 

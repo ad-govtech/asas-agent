@@ -49,18 +49,39 @@ def _build_tracer(settings: Settings):
 
     client = langfuse_client(settings)
 
-    try:  # Traces every model and tool call the Agents SDK makes.
-        from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
-
-        OpenAIAgentsInstrumentor().instrument(exclusive_processor=True)
-    except ImportError:
-        # Without span instrumentation, keep only our Langfuse run observation.
-        # Selecting an internal trace backend must not enable OpenAI's exporter.
+    if not _instrument_spans():
+        # Whatever the reason - the package is missing, or it refused to attach
+        # to this version of the SDK - the Agents SDK is left with its default
+        # processor, which posts traces to OpenAI. Choosing an internal trace
+        # backend must never turn on an external one, so clear it.
         from agents import set_trace_processors
 
         set_trace_processors([])
 
     return client
+
+
+def _instrument_spans() -> bool:
+    """Route the SDK's own spans to the configured backend. True if that worked.
+
+    `instrument()` reports a version mismatch by logging and returning, so the
+    only trustworthy check is whether a processor was actually installed.
+    """
+    try:
+        from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
+    except ImportError:
+        return False  # Install the `tracing` extra for span-level detail.
+
+    try:
+        OpenAIAgentsInstrumentor().instrument(exclusive_processor=True)
+    except Exception:  # noqa: BLE001 - any failure here means "not instrumented"
+        return False
+
+    from agents.tracing import get_trace_provider
+
+    installed = getattr(get_trace_provider(), "_multi_processor", None)
+    processors = getattr(installed, "_processors", ())
+    return any(type(processor).__module__.startswith("openinference") for processor in processors)
 
 
 def build_platform(
