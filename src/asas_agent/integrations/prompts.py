@@ -270,7 +270,7 @@ async def pin_prompt(ref: PromptRef, provider: PromptProvider | None) -> PromptR
 
     The stored template still carries its placeholders: values that belong to a
     request cannot be known at publication. The definition is immutable, so the
-    variables it sets are frozen with it.
+    variables it sets, and the names it lets a request fill, are frozen with it.
     """
     if ref.snapshot is not None or ref.snapshot_messages is not None:
         return ref.model_copy(deep=True)
@@ -280,15 +280,19 @@ async def pin_prompt(ref: PromptRef, provider: PromptProvider | None) -> PromptR
     template = await provider.template(ref)
     # Substitution is not possible yet, but the shape is already decidable.
     _split(template, template.messages)
+    # Everything the definition decided about variables is carried over: an
+    # allowlist that went missing here would publish as "any name is allowed".
+    frozen = {"variables": ref.variables, "request_variables": ref.request_variables}
+
     if template.version is not None:
-        return PromptRef(name=ref.name, version=template.version, variables=ref.variables)
+        return PromptRef(name=ref.name, version=template.version, **frozen)
     if template.is_chat:
         return PromptRef(
             name=ref.name,
             snapshot_messages=[PromptMessageRef(role=m.role, content=m.content) for m in template.messages],
-            variables=ref.variables,
+            **frozen,
         )
-    return PromptRef(name=ref.name, snapshot=template.messages[0].content, variables=ref.variables)
+    return PromptRef(name=ref.name, snapshot=template.messages[0].content, **frozen)
 
 
 class LangfusePrompts:
