@@ -73,7 +73,7 @@ class AgentFactory:
         agent_key: str,
         environment: str,
         context: RuntimeContext,
-        prompt_variables: dict[str, Any] | None = None,
+        inputs: dict[str, Any] | None = None,
         is_sub_agent: bool = False,
         visited: set[str] | None = None,
     ) -> BuiltAgent:
@@ -93,7 +93,7 @@ class AgentFactory:
             # A sub-agent is filled by its own definition. The caller
             # addressed the parent and cannot know what a specialist needs,
             # so nothing is forwarded to one.
-            resolved_prompt = await self.prompts.resolve(config.prompt, None if is_sub_agent else prompt_variables)
+            resolved_prompt = await self.prompts.resolve(config.prompt, None if is_sub_agent else inputs)
             if is_sub_agent and resolved_prompt.messages:
                 # A sub-agent is handed the caller's or the parent's input, so
                 # there is nowhere to put its own opening messages.
@@ -124,7 +124,7 @@ class AgentFactory:
                     agent_key=ref.agent_key,
                     environment=ref.environment,
                     context=context,
-                    prompt_variables=prompt_variables,
+                    inputs=None,
                     is_sub_agent=True,
                     visited=set(visited),
                 )
@@ -162,7 +162,7 @@ class AgentFactory:
                     # trace records which names were filled and a digest of the
                     # text that resulted. The values themselves are the
                     # caller's data and are not copied here.
-                    "prompt_variables": list(resolved_prompt.filled),
+                    "inputs": list(resolved_prompt.filled),
                     "instructions_digest": sha256(resolved_prompt.instructions.encode("utf-8")).hexdigest()[:12],
                 }
             )

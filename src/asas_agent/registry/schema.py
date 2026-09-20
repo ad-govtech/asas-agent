@@ -21,7 +21,7 @@ class PromptMessageRef(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    role: Literal["system", "developer", "user", "assistant"]
+    role: Literal["system", "user"]
     content: str
 
 

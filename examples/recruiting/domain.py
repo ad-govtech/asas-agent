@@ -136,16 +136,13 @@ POLICY_CLAUSES = [
         "code": "HR-31",
         "title": "Arabic for resident-facing roles",
         "text": (
-            "Roles that deal with residents directly require professional Arabic. "
-            "It cannot be waived by the panel."
+            "Roles that deal with residents directly require professional Arabic. It cannot be waived by the panel."
         ),
     },
     {
         "code": "HR-47",
         "title": "Evidence for every screening decision",
-        "text": (
-            "A screening decision records the evidence it relies on. A score alone is not a decision."
-        ),
+        "text": ("A screening decision records the evidence it relies on. A score alone is not a decision."),
     },
     {
         "code": "HR-58",

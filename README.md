@@ -68,8 +68,8 @@ platform = build_platform()
 result = await platform.runtime.run(
     agent_key="customer-advisor",
     environment="production",
-    user_input="Explain this rejection and what the customer can do next.",
-    business_context={"application": application.to_ai_view()},
+    inputs={"application": application.to_ai_view()},
+    message="Explain this rejection and what the customer can do next.",
     context=RuntimeContext(tenant_id="T001", user_id="U812", correlation_id="REQ-09F4"),
 )
 ```
@@ -88,9 +88,9 @@ asas-agent agent list customer-advisor
 
 Publishing freezes the prompt: file prompts are stored in the agent definition as they are written, placeholders included; Langfuse labels such as `production` are resolved to an exact version. Editing a file does not change published agents. Create and publish a new agent version to adopt the edit. File snapshots travel with promotion and rollback, and runtime servers do not need the original files.
 
-## Chat prompts and variables
+## Prompts, inputs and messages
 
-A prompt is either one block of text or a chat prompt: an ordered list of role-tagged messages.
+A prompt is one block of text, or a chat prompt: **one system message, optionally followed by one user message**.
 
 ```json
 [
@@ -99,33 +99,38 @@ A prompt is either one block of text or a chat prompt: an ordered list of role-t
 ]
 ```
 
-System and developer messages become the agent's instructions. User and assistant messages open the run, so a prompt author decides where each fact lands instead of receiving one JSON blob.
+The system message becomes the agent's instructions. The user message, if there is one, opens the run, so the prompt author decides where each fact lands. Any other shape is refused when the agent is published.
 
-Placeholders are filled from two places:
+A run is given two things, and neither depends on the other:
 
-- `prompt.variables` in the agent definition, for values that are part of the published agent;
-- `prompt_variables` on the request, for values that belong to this call.
-
-What a request may fill is not configured anywhere: it is what the prompt asks for and the definition has not already answered. A value the prompt does not use is refused, since it would never reach the model. A request may add values; it may not replace one the definition sets. Definition variables reach the system instructions, so a caller that could override one could rewrite a published agent's instructions. Publish a new version to change such a value.
+- **`inputs`** fill the prompt's `{{placeholders}}`;
+- **`message`** is what the caller is saying to the agent, and follows the prompt's own user message.
 
 ```python
 result = await platform.runtime.run(
     agent_key="screening-assistant",
     environment="production",
-    prompt_variables={"application": application.to_ai_view()},
+    inputs={"application": application.to_ai_view()},
+    run_name=f"screening-assistant-{application.id}",
     context=RuntimeContext(tenant_id="T001", user_id="U812", correlation_id="REQ-09F4"),
 )
 ```
 
-The same values can be sent to the runtime API as `prompt_variables`, or from the CLI with `--var name=value`.
+The same two fields exist on `POST /v1/agents/run`; the CLI takes `--input name=value` and an optional message.
 
-A placeholder with no value is an error: the model is never handed a literal `{{application}}` to read. Only the prompt's own placeholders count, so a CV or a job description that contains `{{...}}` is passed through as the data it is.
+**What may be filled is derived, never configured.** It is what the prompt asks for, minus what the definition answers in `prompt.variables`. A value the prompt does not use is refused, because it would never reach the model; a placeholder with no value is refused too, so the model is never handed a literal `{{application}}`. A request may add values but never replace one the definition sets: those reach the system instructions, and a caller able to rewrite one could rewrite a published agent's instructions.
 
-Request variables reach the system instructions, so treat them as content the model will follow: pass your own data, not text a member of the public wrote, and use `request_variables` to keep the surface small. Their total size is capped by `ASAS_PROMPT_VARIABLES_MAX_BYTES` (256 KB by default), because instructions are re-sent on every turn.
+Only the prompt's own placeholders count, so a CV or job description containing `{{...}}` is passed through as the data it is. Values render as Langfuse renders them - `str(value)`, and nothing at all for `None` - so a file prompt and a Langfuse prompt with the same text produce the same call. Their total size is capped by `ASAS_INPUTS_MAX_BYTES` (256 KB).
 
-Values render as Langfuse renders them: `str(value)`, and nothing at all for `None`. A file prompt and a Langfuse prompt with the same text produce the same call.
+A sub-agent is filled by its own definition: nothing is forwarded from its parent, because the caller addressed the parent and cannot know what a specialist needs.
 
-A sub-agent is filled from the same request variables as its parent, minus any its own definition already sets. Its prompt may not carry user or assistant messages, because a sub-agent is handed its caller's input and has nowhere to put them; that is refused at build time rather than dropped. `user_input` and `context` still work with a chat prompt and arrive as a JSON message after the prompt's own, but only when the caller sends them.
+## Naming a run
+
+One agent often runs many times in the same second - once per rubric area, once per candidate - and afterwards someone has to tell those runs apart: a person reading traces, or an evaluation harness that groups generations by name.
+
+`run_name` is that name. It reaches the Langfuse observation and the trace it opens; the agent stays a tag and the correlation id is the session, so a fan-out is still findable as one agent and one request. Without it a run is `agent:<agent key>`. A name is plain text, at most 200 bytes, and cannot start with `agent:`, which is how the runtime names a run of an agent.
+
+What the runtime records about a run - agent key and version, prompt name and version, which inputs were filled, model, toolset, tenant - is its own. A request cannot add to it or overwrite it: a trace is evidence of what ran.
 
 ## What runs share
 
@@ -149,8 +154,7 @@ Prompts are cached: Langfuse's SDK keeps them for 60 seconds, and a prompt file 
 - A missing production prompt is an error. The runtime never falls back to a draft.
 - A prompt variable with no value is an error, not a placeholder left in the text.
 - A request cannot replace a variable the published definition sets.
-- A chat prompt with no system message, or with an empty one, is refused when it is published, not when it runs.
-- Instructions come first: a system message after a user or assistant message is refused, because instructions are hoisted out of the conversation.
+- A prompt that is not one system message, optionally followed by one user message, is refused when it is published, not when it runs.
 - A message whose content is not text is refused.
 
 ## Choose prompts and tracing
@@ -204,7 +208,7 @@ Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to t
 | `ASAS_PROMPT_PROVIDER` | `file` (default) or `langfuse` |
 | `ASAS_PROMPT_DIR` | Prompt folder for file drafts (default: `prompts`) |
 | `ASAS_TRACING_PROVIDER` | `none` (default) or `langfuse`, independent of prompts |
-| `ASAS_PROMPT_VARIABLES_MAX_BYTES` | Ceiling on a request's prompt variables (default: 256000) |
+| `ASAS_INPUTS_MAX_BYTES` | Ceiling on the inputs one run may send (default: 256000) |
 | `ASAS_TRACING` | Set `false` to disable tracing regardless of provider |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` | Prompts and traces |
 | `OPENAI_API_KEY` | OpenAI models |

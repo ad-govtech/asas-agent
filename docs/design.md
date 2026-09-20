@@ -25,7 +25,7 @@ The runtime holds no business state and no session. Anything durable lives in Po
 | Validation | Pydantic, on save, on publish, and again on load | Bad configuration never reaches a model call |
 | Prompts | File drafts with registry snapshots, or optional Langfuse | Developers choose whether to operate a separate prompt service |
 | Prompt pinning | Publishing stores the file template or pins a Langfuse version | `customer-advisor v2` always means the same thing |
-| Prompt shape | Text or chat; system messages instruct, the rest open the run | The prompt author places each fact, instead of the runtime handing the model one JSON blob |
+| Prompt shape | Text, or one system message and at most one user message | The prompt author places each fact, and the shape is small enough to hold in your head |
 | Prompt variables | The definition's values publish with the agent; the request's arrive per call, and are what the prompt asks for | A request's data cannot be frozen into a version, and what it may fill needs no configuration |
 | Shared lookups | Runs asking at the same moment share one query; nothing is kept afterwards | A fan-out asks the registry once, and a promotion is visible to the next run |
 | Tools | Named in configuration, implemented in the app | The database never carries code, URLs or credentials |
@@ -65,9 +65,24 @@ Langfuse remains available through the `langfuse` extra (or `tracing` for span i
 
 ## Upgrading a registry written by a pre-release build
 
-A prompt snapshot stores the template as written, placeholders included, and the definition's variables beside it. A pre-release build stored *rendered* text instead and dropped the variables, and the two are indistinguishable in the row.
+A prompt snapshot stores the template as written, placeholders included, and the definition's variables beside it. A pre-release build stored *rendered* text instead and dropped the variables. Nothing in the row says which build wrote it, and a date does not settle it either: an old binary can publish today.
 
-This package has not been released, so no such rows are expected to exist. If a registry was populated by an earlier build, republish those agents before upgrading: a stored `Explain {{customer}}` that was already rendered would otherwise be read as a template and either demand a value for `customer` or substitute request data into text that used to be literal. A published version is immutable, so the fix is a new version, not an edit.
+So the question is answered from deployment history, not from a query. Inventory every snapshot-bearing row:
+
+```sql
+SELECT agent_key, version, status, published_at, created_by
+FROM agent_definitions
+WHERE config->'prompt' ? 'snapshot' OR config->'prompt' ? 'snapshot_messages'
+ORDER BY agent_key, version;
+```
+
+Then, for each row, establish which build published it. If every one was published by a build that stores templates, the current format is the supported starting point. If any was published by an earlier build, republish that agent from the current build - a published version is immutable, so it is a new version, not an edit, and republishing with the old binary would only write the old format again.
+
+A rendered snapshot read as a template either demands a value for a placeholder that used to be literal text, or substitutes a request's data into it. Both are loud rather than silent, but both are wrong.
+
+## Divergences from the engineering guideline
+
+The guideline sketches a runtime API taking `input` plus a `business_context` object. This package takes `inputs`, which fill the prompt's placeholders, and an optional `message`. One convention rather than two means a developer never has to decide where a fact belongs, and adding a placeholder to a prompt cannot change what the other parameter means. The guideline's intent - the business service loads what it already knows and passes it in, rather than the agent rediscovering it - is unchanged.
 
 ## Runtime and publication safeguards
 

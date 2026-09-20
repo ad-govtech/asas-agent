@@ -72,7 +72,7 @@ async def explain_rejection(application_id: str) -> CustomerAdvice:
     platform = build_platform()
 
     # What the service always knows. The agent should not rediscover this.
-    business_context = {
+    case = {
         "customer": {"id": "C123", "segment": "resident", "language": "en"},
         "application": {"id": application_id, "status": "rejected", "submitted_at": "2026-08-30"},
         "decision": {"reason_codes": ["POLICY_17"], "decided_at": "2026-09-05"},
@@ -82,8 +82,8 @@ async def explain_rejection(application_id: str) -> CustomerAdvice:
         result = await platform.runtime.run(
             agent_key="customer-advisor",
             environment=os.getenv("ASAS_ENVIRONMENT", "dev"),
-            user_input="Explain this rejection and propose what the customer can do next.",
-            business_context=business_context,
+            inputs={"case": case},
+            message="Explain this rejection and propose what the customer can do next.",
             context=RuntimeContext(
                 tenant_id="T001",
                 user_id="U812",

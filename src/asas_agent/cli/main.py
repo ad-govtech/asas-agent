@@ -341,25 +341,23 @@ def agent_show(
 @app.command()
 def run(
     agent_key: str = typer.Argument(...),
-    message: str = typer.Argument(..., help="What to ask the agent."),
+    message: str = typer.Argument("", help="What to say to the agent, if its prompt does not ask on its own."),
     environment: str = typer.Option("production", "--env"),
-    context_file: Path = typer.Option(None, "--context", help="JSON file of facts to pass in."),
-    variables: list[str] = typer.Option(
-        None, "--var", help="A prompt variable for this run, as name=value. Repeatable."
-    ),
+    inputs_file: Path = typer.Option(None, "--inputs", help="JSON file of values the prompt asks for."),
+    values: list[str] = typer.Option(None, "--input", help="One value the prompt asks for, as name=value."),
+    run_name: str = typer.Option(None, "--run-name", help="What to call this run in the trace."),
     tenant: str = typer.Option("local", "--tenant"),
     user: str = typer.Option("cli", "--user"),
 ) -> None:
     """Run an agent once from the command line."""
     from asas_agent.runtime.context import RuntimeContext
 
-    business_context = json.loads(context_file.read_text(encoding="utf-8")) if context_file else {}
-    prompt_variables = {}
-    for pair in variables or []:
+    inputs = json.loads(inputs_file.read_text(encoding="utf-8")) if inputs_file else {}
+    for pair in values or []:
         name, separator, value = pair.partition("=")
         if not separator:
-            raise typer.BadParameter(f"Write a prompt variable as name=value, not {pair!r}")
-        prompt_variables[name.strip()] = value
+            raise typer.BadParameter(f"Write an input as name=value, not {pair!r}")
+        inputs[name.strip()] = value
 
     async def work() -> None:
         platform = _platform()
@@ -367,9 +365,9 @@ def run(
             result = await platform.runtime.run(
                 agent_key=agent_key,
                 environment=environment,
-                user_input=message,
-                business_context=business_context,
-                prompt_variables=prompt_variables,
+                inputs=inputs,
+                message=message,
+                run_name=run_name,
                 context=RuntimeContext(
                     tenant_id=tenant,
                     user_id=user,

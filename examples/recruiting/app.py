@@ -164,8 +164,8 @@ async def run(request: RunRequest) -> dict[str, Any]:
     result = await _platform.runtime.run(
         agent_key=request.agent_key,
         environment=ENVIRONMENT,
-        user_input=request.request,
-        business_context=context_facts,
+        inputs={"case": context_facts},
+        message=request.request,
         context=runtime_context,
     )
 
