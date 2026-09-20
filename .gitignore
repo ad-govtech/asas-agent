@@ -13,3 +13,6 @@ prompts/local/
 
 # Browser automation logs and temporary session state
 .playwright-cli/
+
+# Screenshots and other artifacts from local runs
+output/
