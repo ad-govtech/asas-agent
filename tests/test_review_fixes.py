@@ -291,7 +291,7 @@ async def test_trace_flush_runs_off_event_loop(settings):
 
     platform.runtime._tracer = Tracer()
     try:
-        async with platform.runtime._trace("test", context()):
+        async with platform.runtime._trace("test", "test", context()):
             pass
         assert flushed and flushed[0] != main_thread
     finally:
@@ -337,7 +337,7 @@ async def test_cancelled_trace_does_not_wait_for_flush(settings):
     try:
         with pytest.raises(TimeoutError):
             async with asyncio.timeout(0.01):
-                async with platform.runtime._trace("test", context()):
+                async with platform.runtime._trace("test", "test", context()):
                     await asyncio.Event().wait()
         tracer.flush.assert_not_called()
     finally:

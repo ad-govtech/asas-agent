@@ -544,7 +544,9 @@ def test_the_cli_passes_variables_and_rejects_a_pair_without_an_equals(monkeypat
     from asas_agent.cli.main import app as cli_app
 
     run = AsyncMock(
-        return_value=SimpleNamespace(output="done", agent_version=1, prompt_version=None, trace_id=None, toolset=[])
+        return_value=SimpleNamespace(
+            output="done", agent_version=1, prompt_version=None, trace_id=None, trace_name="agent:scorer", toolset=[]
+        )
     )
     platform = SimpleNamespace(runtime=SimpleNamespace(run=run), close=AsyncMock())
     monkeypatch.setattr("asas_agent.cli.main._platform", lambda *a, **k: platform)

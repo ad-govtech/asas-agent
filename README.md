@@ -146,6 +146,26 @@ A fan-out - one call per rubric area, one per candidate in a batch - starts doze
 
 Prompts are cached too: Langfuse's SDK keeps them for 60 seconds, and a prompt file is re-read once it changes on disk. A replacement that preserves the file's timestamp and size (`cp -p`, `rsync -a`, a restored backup) looks unchanged, so restart after one.
 
+## Naming a run
+
+One agent is often run many times over in the same second - once per rubric area, once per candidate - and afterwards someone has to tell those runs apart: a person reading traces, or an evaluation harness that groups generations by name.
+
+```python
+result = await platform.runtime.run(
+    agent_key="candidate-job-scorer",
+    environment="production",
+    prompt_variables={"area": area, "candidate": candidate.to_ai_view()},
+    trace_name=f"candidate-job-scorer-{area}",
+    trace_metadata={"area": area, "candidate_id": candidate.id},
+    context=RuntimeContext(tenant_id="T001", user_id="U812", correlation_id="REQ-09F4"),
+)
+result.trace_name  # what to look for in Langfuse
+```
+
+Without a name a run is `agent:<agent key>`, as before. The name reaches the Langfuse observation, the trace and the Agents SDK's own workflow name, and the correlation id groups a request's runs together. The agent is always a tag, so every branch of a fan-out is still findable as one agent.
+
+`trace_metadata` records your own fields beside what the runtime records itself: agent key and version, prompt name and version, which variables were filled, model, toolset and tenant. A request cannot overwrite those - a trace is evidence of what ran - and is refused if it tries. The same two fields exist on `POST /v1/agents/run`, and `--trace-name` on the CLI.
+
 ## Rules the package enforces
 
 - Configuration names capabilities; it never carries code, SQL, URLs or secrets.
@@ -156,6 +176,7 @@ Prompts are cached too: Langfuse's SDK keeps them for 60 seconds, and a prompt f
 - A missing production prompt is an error. The runtime never falls back to a draft.
 - A prompt variable with no value is an error, not a placeholder left in the text.
 - A request cannot replace a variable the published definition sets.
+- A request cannot overwrite what the runtime records about a run in its trace.
 - A chat prompt with no system message, or with an empty one, is refused when it is published, not when it runs.
 - Instructions come first: a system message after a user or assistant message is refused, because instructions are hoisted out of the conversation.
 - A message whose content is not text is refused.

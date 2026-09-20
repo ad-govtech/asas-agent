@@ -41,6 +41,14 @@ class AgentRunRequest(BaseModel):
         default_factory=dict,
         description="Values for this request's `{{placeholders}}`, on top of the ones the definition sets.",
     )
+    trace_name: str | None = Field(
+        default=None,
+        description="What to call this run in the trace, for telling apart many runs of one agent.",
+    )
+    trace_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Fields to record on the trace, alongside what the runtime records itself.",
+    )
     execution: ExecutionContext
 
 
@@ -50,6 +58,7 @@ class AgentRunResponse(BaseModel):
     agent_version: int
     prompt_version: int | None
     trace_id: str | None
+    trace_name: str
     toolset: list[str]
 
 
@@ -114,6 +123,8 @@ def create_app(platform: Platform | None = None) -> FastAPI:
                 user_input=request.input,
                 business_context=request.context,
                 prompt_variables=request.prompt_variables,
+                trace_name=request.trace_name,
+                trace_metadata=request.trace_metadata,
                 context=context,
             )
         except RegistryError as exc:
@@ -138,6 +149,7 @@ def create_app(platform: Platform | None = None) -> FastAPI:
             agent_version=result.agent_version,
             prompt_version=result.prompt_version,
             trace_id=result.trace_id,
+            trace_name=result.trace_name,
             toolset=result.toolset,
         )
 

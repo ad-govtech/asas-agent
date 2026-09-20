@@ -33,6 +33,7 @@ The runtime holds no business state and no session. Anything durable lives in Po
 | Models | Registry of providers, with a capability table | A model that cannot call tools is refused at publish, not mid-run |
 | Execution | OpenAI Agents SDK | The SDK is the engine; `AgentConfig` is our own format |
 | Tracing | Disabled by default; optional Langfuse configured separately from prompts | No observability service is required to run an agent |
+| Trace naming | Per run, chosen by the caller, defaulting to the agent | One agent runs many times per request; a trace has to say which run it was |
 
 ## What the application owns
 

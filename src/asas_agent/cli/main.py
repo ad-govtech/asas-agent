@@ -347,6 +347,7 @@ def run(
     variables: list[str] = typer.Option(
         None, "--var", help="A prompt variable for this run, as name=value. Repeatable."
     ),
+    trace_name: str = typer.Option(None, "--trace-name", help="What to call this run in the trace."),
     tenant: str = typer.Option("local", "--tenant"),
     user: str = typer.Option("cli", "--user"),
 ) -> None:
@@ -370,6 +371,7 @@ def run(
                 user_input=message,
                 business_context=business_context,
                 prompt_variables=prompt_variables,
+                trace_name=trace_name,
                 context=RuntimeContext(
                     tenant_id=tenant,
                     user_id=user,
@@ -382,7 +384,7 @@ def run(
             typer.echo(
                 f"\n{agent_key} v{result.agent_version}"
                 + (f", prompt v{result.prompt_version}" if result.prompt_version else "")
-                + (f", trace {result.trace_id}" if result.trace_id else "")
+                + (f", trace {result.trace_name}" + (f" {result.trace_id}" if result.trace_id else ""))
             )
         finally:
             await platform.close()

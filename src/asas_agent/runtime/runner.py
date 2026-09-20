@@ -12,9 +12,58 @@ from asas_agent.integrations.prompts import PromptMessage
 from asas_agent.runtime.context import RuntimeContext
 from asas_agent.runtime.factory import AgentFactory
 
+#: What a trace name may be. Long enough for a prompt name and a discriminator.
+TRACE_NAME_MAX_LENGTH = 200
+
+#: Facts the runtime records itself. A caller cannot overwrite them in a trace.
+RESERVED_TRACE_KEYS = frozenset(
+    {
+        "agent_key",
+        "agent_version",
+        "environment",
+        "prompt_name",
+        "prompt_version",
+        "prompt_variables",
+        "instructions_digest",
+        "model_provider",
+        "model_name",
+        "toolset",
+        "tenant_id",
+    }
+)
+
 
 class RunInputError(ValueError):
     """Raised when what the caller sent cannot start a run."""
+
+
+def _trace_name(name: str | None, agent_key: str) -> str:
+    """What this run is called in the trace.
+
+    A product that fans out runs one agent many times over - once per rubric
+    area, once per candidate - and needs to tell those runs apart afterwards,
+    which is what an evaluation harness reads. Without a name, the agent's own.
+    """
+    if name is None:
+        return f"agent:{agent_key}"
+    cleaned = " ".join(name.split())
+    if not cleaned:
+        raise RunInputError("A trace name cannot be blank. Leave it out to use the agent's own name.")
+    if len(cleaned) > TRACE_NAME_MAX_LENGTH:
+        raise RunInputError(f"A trace name is at most {TRACE_NAME_MAX_LENGTH} characters; this one is {len(cleaned)}.")
+    return cleaned
+
+
+def _trace_extras(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """A caller's own trace fields, which may add to what the runtime records but never replace it."""
+    extras = metadata or {}
+    reserved = sorted(RESERVED_TRACE_KEYS & set(extras))
+    if reserved:
+        raise RunInputError(
+            f"The runtime records {', '.join(reserved)} itself, so a request cannot set them. "
+            "Use different names for your own trace fields."
+        )
+    return dict(extras)
 
 
 def _payload(user_input: str, business_context: dict[str, Any] | None) -> dict[str, Any]:
@@ -59,6 +108,8 @@ class AgentRunResult:
     agent_version: int
     prompt_version: int | None
     trace_id: str | None
+    #: What this run is called in the trace, so a caller can find it again.
+    trace_name: str
     toolset: list[str]
 
 
@@ -88,6 +139,8 @@ class AgentRuntime:
         user_input: str = "",
         business_context: dict[str, Any] | None = None,
         prompt_variables: dict[str, Any] | None = None,
+        trace_name: str | None = None,
+        trace_metadata: dict[str, Any] | None = None,
         context: RuntimeContext,
     ) -> AgentRunResult:
         from agents import RunConfig, Runner
@@ -95,13 +148,16 @@ class AgentRuntime:
         if context.max_turns < 1 or context.timeout_seconds <= 0:
             raise ValueError("Runtime turn and timeout limits must be positive")
         self._check_size(prompt_variables)
+        name = _trace_name(trace_name, agent_key)
         context = replace(
             context,
             environment=environment,
             max_turns=min(context.max_turns, self.max_turns_ceiling),
             timeout_seconds=min(context.timeout_seconds, self.timeout_ceiling_seconds),
             dependencies={**self.default_dependencies, **context.dependencies},
-            trace_metadata=dict(context.trace_metadata),
+            # A caller's fields first: what the factory records about the run
+            # is written over them, and cannot be forged.
+            trace_metadata={**_trace_extras(trace_metadata), **context.trace_metadata},
         )
         started = asyncio.get_running_loop().time()
         async with asyncio.timeout(context.timeout_seconds) as deadline:
@@ -116,13 +172,18 @@ class AgentRuntime:
                 raise TimeoutError("Agent assembly exceeded its execution deadline")
             deadline.reschedule(started + built.timeout_seconds)
 
-            async with self._trace(agent_key, context) as trace_id:
+            async with self._trace(name, agent_key, context) as trace_id:
                 result = await Runner.run(
                     built.agent,
                     input=_run_input(built.prompt_messages, user_input, business_context),
                     context=context,
                     max_turns=built.max_turns,
-                    run_config=RunConfig(tracing_disabled=self._tracer is None),
+                    run_config=RunConfig(
+                        tracing_disabled=self._tracer is None,
+                        workflow_name=name,
+                        group_id=context.correlation_id,
+                        trace_metadata=dict(context.trace_metadata),
+                    ),
                 )
 
         return AgentRunResult(
@@ -131,6 +192,7 @@ class AgentRuntime:
             agent_version=built.agent_version,
             prompt_version=built.prompt_version,
             trace_id=trace_id,
+            trace_name=name,
             toolset=list(built.config.tools),
         )
 
@@ -146,15 +208,16 @@ class AgentRuntime:
             )
 
     @asynccontextmanager
-    async def _trace(self, agent_key: str, context: RuntimeContext):
+    async def _trace(self, name: str, agent_key: str, context: RuntimeContext):
         """Open a Langfuse span when tracing is on; otherwise do nothing."""
         tracer = self._tracer
         if tracer is None:
             yield None
             return
         try:
-            with tracer.start_as_current_observation(name=f"agent:{agent_key}") as observation:
+            with tracer.start_as_current_observation(name=name) as observation:
                 tracer.update_current_trace(
+                    name=name,
                     user_id=context.user_id,
                     session_id=context.correlation_id,
                     metadata={**context.trace_metadata, "tenant_id": context.tenant_id},
