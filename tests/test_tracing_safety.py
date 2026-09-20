@@ -100,3 +100,66 @@ def test_an_instrumentor_that_did_attach_is_left_in_place(settings, monkeypatch)
 def test_tracing_switched_off_touches_nothing(settings):
     settings.tracing_provider = "none"
     assert _build_tracer(settings) is None
+
+
+def openai_exporting_processor():
+    """What the SDK installs by default: a batch processor posting to OpenAI."""
+    from agents.tracing.processors import BackendSpanExporter, BatchTraceProcessor
+
+    processor = object.__new__(BatchTraceProcessor)
+    processor._exporter = object.__new__(BackendSpanExporter)
+    return processor
+
+
+def internal_processor():
+    processor_type = type("OpenInferenceTracingProcessor", (), {})
+    processor_type.__module__ = "openinference.instrumentation.openai_agents._processor"
+    return processor_type()
+
+
+def test_a_process_already_instrumented_without_exclusivity_still_loses_openais_exporter(settings, monkeypatch):
+    """`instrument(exclusive_processor=True)` logs and returns when it has already run, changing nothing."""
+    from agents import set_trace_processors
+
+    internal = internal_processor()
+    set_trace_processors([openai_exporting_processor(), internal])
+
+    # Attaching again is a no-op, exactly as the real instrumentor behaves here.
+    _instrumentor(monkeypatch, lambda **kwargs: None)
+    monkeypatch.setattr("asas_agent.bootstrap.langfuse_client", MagicMock())
+    settings.tracing_provider = "langfuse"
+
+    _build_tracer(settings)
+
+    assert processors() == (internal,), "presence of an internal processor was taken for exclusivity"
+
+
+def test_another_librarys_processor_is_left_alone(settings, monkeypatch):
+    """What someone else installed is their business; what reaches OpenAI is ours."""
+    from agents import set_trace_processors
+
+    theirs = SimpleNamespace(on_trace_start=lambda *a: None)
+    set_trace_processors([theirs, openai_exporting_processor()])
+
+    _instrumentor(monkeypatch, lambda **kwargs: None)
+    monkeypatch.setattr("asas_agent.bootstrap.langfuse_client", MagicMock())
+    settings.tracing_provider = "langfuse"
+
+    _build_tracer(settings)
+
+    assert processors() == (theirs,)
+
+
+def test_a_list_with_nothing_exporting_to_openai_is_not_touched(settings, monkeypatch):
+    from agents import set_trace_processors
+
+    internal = internal_processor()
+    set_trace_processors([internal])
+
+    _instrumentor(monkeypatch, lambda **kwargs: None)
+    monkeypatch.setattr("asas_agent.bootstrap.langfuse_client", MagicMock())
+    settings.tracing_provider = "langfuse"
+
+    _build_tracer(settings)
+
+    assert processors() == (internal,)
