@@ -1,7 +1,21 @@
 # CV Review CLI — results
 
 Built to [cv-review-cli-requirements.md](cv-review-cli-requirements.md). The
-application is at `cv-review/`, outside this repository.
+application is at **[ad-govtech/cv-review](https://github.com/ad-govtech/cv-review)**,
+revision `2e1abfc`, outside this repository.
+
+```bash
+git clone https://github.com/ad-govtech/cv-review && cd cv-review
+docker compose -f ../asas-agent/docker-compose.yml up -d postgres
+createdb cvreview
+uv venv && uv pip install -e ../asas-agent -e ".[dev]"
+cp .env.example .env
+python model_server.py &        # the deterministic endpoint, on :8110
+cv-review setup                 # migrate, then release the agent
+pytest -q                       # the 22 acceptance tests
+python bench.py                 # 1, 5 and 40 concurrent, conditions recorded
+cv-review evaluate              # the rubric, against whatever model is configured
+```
 
 **22/22 acceptance tests pass. 15/15 rubric checks pass. The concurrency
 benchmark runs clean at 1, 5 and 40.** What follows is what was built, what was
