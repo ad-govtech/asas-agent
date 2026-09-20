@@ -109,11 +109,11 @@ class CachedAgentRepository:
         # also retrieves the exception of a failed query that nobody awaited.
         task.add_done_callback(partial(self._finished, key, self._generation))
 
-        try:
-            return _own_copy(await asyncio.shield(task))
-        finally:
-            if self._in_flight.get(key) is task:
-                self._in_flight.pop(key, None)
+        # Registration is ended by the query finishing, or by a write, never by
+        # the caller that happened to start it: `shield` keeps the query running
+        # after a deadline, and a run arriving meanwhile should join it rather
+        # than open a second one.
+        return _own_copy(await asyncio.shield(task))
 
     def _finished(self, key: tuple[str, str], generation: int, task: asyncio.Task[AgentDefinition]) -> None:
         if self._in_flight.get(key) is task:

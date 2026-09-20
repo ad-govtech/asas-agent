@@ -448,3 +448,38 @@ async def test_a_platform_runs_its_agents_through_the_cache(monkeypatch, tmp_pat
         assert query.await_count == 1
     finally:
         await platform.close()
+
+
+async def test_a_run_arriving_after_the_first_one_gave_up_joins_the_query_it_left_running():
+    """The query is still open, so a second query would be pure waste."""
+    registry = Registry(delay=0.05)
+    cached = CachedAgentRepository(registry, ttl_seconds=60)
+
+    impatient = asyncio.create_task(cached.get_active(agent_key="scorer", environment="dev"))
+    await asyncio.sleep(0.01)  # The query has started.
+    impatient.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await impatient
+
+    # Arriving while that query is still running, before it could be cached.
+    assert (await cached.get_active(agent_key="scorer", environment="dev")).version == 1
+    assert registry.calls == 1
+    assert cached.stats.shared == 1
+
+
+async def test_repeated_deadlines_do_not_pile_up_queries():
+    """A slow database and short deadlines is exactly when a second query hurts most."""
+    registry = Registry(delay=0.2)
+    cached = CachedAgentRepository(registry, ttl_seconds=60)
+
+    for _ in range(5):
+        wave = [asyncio.create_task(cached.get_active(agent_key="scorer", environment="dev")) for _ in range(4)]
+        await asyncio.sleep(0.01)
+        for task in wave:
+            task.cancel()
+        await asyncio.gather(*wave, return_exceptions=True)
+
+    assert registry.calls == 1
+    await asyncio.sleep(0.25)
+    assert (await cached.get_active(agent_key="scorer", environment="dev")).version == 1
+    assert registry.calls == 1
