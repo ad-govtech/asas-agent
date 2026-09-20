@@ -254,15 +254,7 @@ An application that calls `build_platform()` in its own process needs neither.
 
 Publishing resolves every name a definition uses - its tools, its output schema, its model settings - without executing a tool or calling a model, so a draft that could not run is refused while it is still a draft. Register application components before calling `build_platform()`. For CLI usage, set `ASAS_REGISTRATION_MODULES`, for example `examples.recruiting.capabilities,examples.recruiting.schemas`. These are trusted application modules, never code from an agent definition.
 
-New model names require explicit capability metadata before publication and runtime use:
-
-```python
-from asas_agent.integrations.models import ModelCapabilities
-
-platform.models.capabilities["gateway:my-model"] = ModelCapabilities(
-    tool_calling=True, structured_output=True,
-)
-```
+A model needs no registration. Publication checks the provider is one this runtime can reach and that the model settings are ones the SDK takes; it does not check that the named model exists or that it can do what the definition asks, because that is the provider's to answer and it answers at the first call. A model that cannot return structured output, or cannot call tools, fails there with its own message - so try a new model in a test environment before promoting it.
 
 `reasoning_effort` is translated to the SDK's `reasoning.effort`; unsupported settings are rejected. Model clients use the credentials from `Settings`, including `.env` values. The OpenAI client is constrained to the tested 2.29 series for compatibility with Agents SDK 0.8.
 

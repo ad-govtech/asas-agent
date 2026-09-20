@@ -60,7 +60,6 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
-    { name = "fastapi" },
     { name = "httpx" },
     { name = "openai" },
     { name = "openai-agents" },
@@ -68,17 +67,22 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "typer" },
-    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.optional-dependencies]
 dev = [
+    { name = "fastapi" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 langfuse = [
     { name = "langfuse" },
+]
+server = [
+    { name = "fastapi" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 tracing = [
     { name = "langfuse" },
@@ -89,7 +93,8 @@ tracing = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.16,<2" },
     { name = "asyncpg", specifier = ">=0.30,<0.32" },
-    { name = "fastapi", specifier = ">=0.128,<0.129" },
+    { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.128,<0.129" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.128,<0.129" },
     { name = "httpx", specifier = ">=0.28,<0.29" },
     { name = "langfuse", marker = "extra == 'langfuse'", specifier = ">=3.7,<4" },
     { name = "langfuse", marker = "extra == 'tracing'", specifier = ">=3.7,<4" },
@@ -103,9 +108,10 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.40,<3" },
     { name = "typer", specifier = ">=0.15,<1" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.39,<0.40" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'dev'", specifier = ">=0.39,<0.40" },
+    { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.39,<0.40" },
 ]
-provides-extras = ["langfuse", "tracing", "dev"]
+provides-extras = ["server", "langfuse", "tracing", "dev"]
 
 [[package]]
 name = "asyncpg"
