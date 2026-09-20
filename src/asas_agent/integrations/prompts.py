@@ -347,8 +347,10 @@ class FilePrompts:
     The registry stores the template at publication; no service is needed.
     """
 
-    def __init__(self, directory: str | Path = "prompts"):
+    def __init__(self, directory: str | Path = "prompts", *, cache: bool = True):
         self.directory = Path(directory)
+        #: Parsed templates, keyed by what the file looked like when they were read.
+        self._cache: dict[str, tuple[tuple[Any, ...], PromptTemplate]] = {} if cache else None
 
     async def template(self, ref: PromptRef) -> PromptTemplate:
         snapshot = _snapshot_template(ref)
@@ -369,19 +371,49 @@ class FilePrompts:
         except OSError as exc:
             raise PromptError(f"Cannot read prompt file at {chat_path}") from exc
 
+        path = chat_path if is_chat else self._path(f"{ref.name}.md")
+        cached = self._cached(ref.name, path)
+        if cached is not None:
+            return cached
+
         if is_chat:
-            return PromptTemplate(
+            template = PromptTemplate(
                 name=ref.name,
                 version=None,
-                messages=_as_messages(self._read_chat(chat_path, ref.name), ref.name)[0],
+                messages=_as_messages(self._read_chat(path, ref.name), ref.name)[0],
                 is_chat=True,
             )
-        return PromptTemplate(
-            name=ref.name,
-            version=None,
-            messages=(PromptMessage(role="system", content=self._read(self._path(f"{ref.name}.md"))),),
-            is_chat=False,
-        )
+        else:
+            template = PromptTemplate(
+                name=ref.name,
+                version=None,
+                messages=(PromptMessage(role="system", content=self._read(path)),),
+                is_chat=False,
+            )
+        self._remember(ref.name, path, template)
+        return template
+
+    def _stamp(self, path: Path) -> tuple[Any, ...] | None:
+        """What the file is right now. An edit changes it, so an edit is picked up."""
+        try:
+            status = path.stat()
+        except OSError:
+            return None
+        return (str(path), status.st_mtime_ns, status.st_size)
+
+    def _cached(self, name: str, path: Path) -> PromptTemplate | None:
+        if self._cache is None:
+            return None
+        entry = self._cache.get(name)
+        if entry is None:
+            return None
+        stamp, template = entry
+        return template if stamp == self._stamp(path) else None
+
+    def _remember(self, name: str, path: Path, template: PromptTemplate) -> None:
+        stamp = self._stamp(path)
+        if self._cache is not None and stamp is not None:
+            self._cache[name] = (stamp, template)
 
     async def resolve(self, ref: PromptRef, variables: dict[str, Any] | None = None) -> ResolvedPrompt:
         template = await self.template(ref)

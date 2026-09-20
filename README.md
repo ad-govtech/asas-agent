@@ -133,6 +133,17 @@ Values render as Langfuse renders them: `str(value)`, and nothing at all for `No
 
 A sub-agent is filled from the same request variables as its parent, minus any its own definition already sets. Its prompt may not carry user or assistant messages, because a sub-agent is handed its caller's input and has nowhere to put them; that is refused at build time rather than dropped. `user_input` and `context` still work with a chat prompt and arrive as a JSON message after the prompt's own, but only when the caller sends them.
 
+## What a run reuses
+
+A fan-out - one call per rubric area, one per candidate in a batch - starts dozens of runs in the same second, and each one has to know which version its environment is bound to. That question is answered from memory:
+
+- A **published definition never changes**, so its body is reused freely.
+- An **environment binding does change**, because that is what promotion and rollback are, so it is reused for `ASAS_DEFINITION_CACHE_SECONDS` (5 by default). A rollback reaches every running process within that window, with no deployment.
+- Runs that start together **share one query**: forty concurrent runs ask the registry once, not forty times.
+- A promotion or publication made **through this process** clears what it affects at once, so the CLI and an embedded app never wait out the window for their own change.
+
+Set `ASAS_DEFINITION_CACHE_SECONDS=0` to read the registry on every run. Prompts are cached too: Langfuse's SDK keeps them for 60 seconds, and a prompt file is re-read only after it changes on disk.
+
 ## Rules the package enforces
 
 - Configuration names capabilities; it never carries code, SQL, URLs or secrets.
@@ -199,6 +210,8 @@ Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to t
 | `ASAS_PROMPT_DIR` | Prompt folder for file drafts (default: `prompts`) |
 | `ASAS_TRACING_PROVIDER` | `none` (default) or `langfuse`, independent of prompts |
 | `ASAS_PROMPT_VARIABLES_MAX_BYTES` | Ceiling on a request's prompt variables (default: 256000) |
+| `ASAS_DEFINITION_CACHE_SECONDS` | How long a run may reuse an environment binding, and so how quickly a rollback lands (default: 5; 0 disables) |
+| `ASAS_DEFINITION_CACHE_SIZE` | How many agent/environment pairs to keep (default: 256) |
 | `ASAS_TRACING` | Set `false` to disable tracing regardless of provider |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` | Prompts and traces |
 | `OPENAI_API_KEY` | OpenAI models |
