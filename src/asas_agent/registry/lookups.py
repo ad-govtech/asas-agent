@@ -7,10 +7,15 @@ connections makes them queue: measured against a local Postgres, forty
 concurrent lookups take 128 ms where one takes 2.2 ms.
 
 Runs that ask at the same moment therefore share one query. Nothing is stored
-afterwards, so there is no staleness to reason about: the next run asks again,
-and a promotion is visible immediately. A promotion made here also detaches the
-query it affects, so a run arriving after it does not join an answer that
-predates it.
+afterwards, so a promotion is visible to the next run that asks.
+
+One window is narrower than that: a query already in flight is shared with runs
+that arrive while it is open, and it read the registry when it started. A
+promotion made through this process detaches that query, so runs arriving after
+it ask again. A promotion made somewhere else - another process, the CLI -
+cannot, so a run arriving in the moments before that query returns may still be
+given the version that was live when it started. The window is one query, and
+the run after it is current.
 """
 
 from __future__ import annotations
