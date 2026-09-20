@@ -1,4 +1,8 @@
-"""The stateless runtime, over HTTP.
+"""The stateless runtime, over HTTP. Optional: install the `server` extra.
+
+An application that embeds the runtime imports `build_platform` and calls it
+directly. This module is for deploying the runtime as a service of its own,
+and nothing else in the package imports it.
 
 One endpoint runs an agent. The caller is a business service that has already
 authenticated its user and loaded the context the agent needs.

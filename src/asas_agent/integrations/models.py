@@ -1,27 +1,25 @@
 """Model registry.
 
-Configuration names a provider and a model. Only providers registered here can
-be reached, and a definition that asks for a capability the model does not have
-is refused at publish time rather than failing mid-conversation.
+Configuration names a provider and a model, and only the providers here can be
+reached. What a given model can do is the provider's business: asking a model
+for structured output it cannot produce is refused by the provider, with its
+own message, rather than by a table of model names this package would have to
+keep in step with every release.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 SETTABLE_MODEL_SETTINGS = {"temperature", "top_p", "max_tokens", "reasoning", "reasoning_effort"}
 
+#: Where a model can come from. Which models each one serves is its own business.
+PROVIDERS = ("openai", "gateway")
+
 
 class ModelError(RuntimeError):
     """Raised when a model or provider is not available."""
-
-
-@dataclass(frozen=True)
-class ModelCapabilities:
-    tool_calling: bool = True
-    structured_output: bool = True
-    multimodal: bool = False
 
 
 @dataclass
@@ -29,18 +27,9 @@ class ModelRegistry:
     """Resolves `provider:name` into something the Agents SDK accepts."""
 
     settings: Any
-    capabilities: dict[str, ModelCapabilities] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._clients: dict[str, Any] = {}
-        self.capabilities = {
-            "openai:gpt-5.6-sol": ModelCapabilities(multimodal=True),
-            "openai:gpt-5-nano": ModelCapabilities(),
-            # Sovereign and in-country models are served through the gateway. Set
-            # these from what the deployment actually supports.
-            "gateway:jais": ModelCapabilities(tool_calling=False, structured_output=False),
-            **self.capabilities,
-        }
 
     def _gateway_client(self):
         if "gateway" not in self._clients:
@@ -70,18 +59,15 @@ class ModelRegistry:
 
             return OpenAIChatCompletionsModel(model=name, openai_client=self._gateway_client())
 
-        raise ModelError(f"Unknown model provider {provider!r}. Known providers: openai, gateway")
+        raise ModelError(f"Unknown model provider {provider!r}. Known providers: {', '.join(PROVIDERS)}")
 
-    def capability(self, provider: str, name: str) -> ModelCapabilities:
-        if provider not in {"openai", "gateway"}:
-            raise ModelError(f"Unknown model provider {provider!r}")
-        key = f"{provider}:{name}"
-        if key not in self.capabilities:
-            raise ModelError(f"Register capabilities for model {key!r} before using it")
-        return self.capabilities[key]
+    def assert_known(self, provider: str) -> None:
+        """Check the provider without building a client, so publication needs no credentials."""
+        if provider not in PROVIDERS:
+            raise ModelError(f"Unknown model provider {provider!r}. Known providers: {', '.join(PROVIDERS)}")
 
-    def validated_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
-        """Translate our reasoning alias, and reject unsupported settings before publication."""
+    def resolve_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
+        """Translate our reasoning alias, and reject settings the SDK does not take."""
         from agents import ModelSettings
 
         unknown = settings.keys() - SETTABLE_MODEL_SETTINGS

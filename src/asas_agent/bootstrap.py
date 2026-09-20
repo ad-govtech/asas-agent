@@ -16,7 +16,6 @@ from asas_agent.config import Settings, get_settings
 from asas_agent.integrations.models import ModelRegistry
 from asas_agent.integrations.prompts import PromptError, PromptProvider, build_prompt_provider, langfuse_client
 from asas_agent.registry import capabilities as capability_module
-from asas_agent.registry import guardrails as guardrail_module
 from asas_agent.registry import outputs as output_module
 from asas_agent.registry.db import create_engine, create_session_factory
 from asas_agent.registry.lookups import SharedAgentLookups
@@ -140,7 +139,6 @@ def build_platform(
         models=models,
         capabilities=capability_module.registry,
         outputs=output_module.registry,
-        guardrails=guardrail_module.registry,
     )
 
     runtime = AgentRuntime(

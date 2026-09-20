@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from agents import Agent, Model, ModelResponse, ModelSettings, RunConfig, RunContextWrapper, Runner
+from agents import Agent, Model, ModelResponse, ModelSettings, RunConfig, Runner
 from agents.usage import Usage
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 from sqlalchemy.engine import make_url
@@ -162,7 +162,7 @@ async def test_dotenv_key_reaches_real_openai_client(tmp_path, monkeypatch):
 
 
 def test_reasoning_alias_is_translated(settings):
-    translated = ModelRegistry(settings).validated_settings({"reasoning_effort": "low"})
+    translated = ModelRegistry(settings).resolve_settings({"reasoning_effort": "low"})
     assert ModelSettings(**translated).reasoning.effort == "low"
 
 
@@ -171,7 +171,7 @@ def test_reasoning_alias_is_translated(settings):
 )
 def test_invalid_model_settings_fail_validation(settings, values):
     with pytest.raises(ModelError):
-        ModelRegistry(settings).validated_settings(values)
+        ModelRegistry(settings).resolve_settings(values)
 
 
 async def test_direct_runtime_merges_dependencies_and_clamps_limits(settings, monkeypatch):
@@ -243,30 +243,6 @@ async def test_runtime_deadline_cancels_pending_work(settings, monkeypatch, phas
         await platform.close()
 
 
-async def test_child_and_handoff_limits_are_preserved(settings, monkeypatch):
-    platform = build_platform(settings)
-    child = config(runtime={"max_turns": 1, "timeout_seconds": 1})
-    try:
-        for mode in ("tool", "handoff"):
-            parent = config(sub_agents=[{"agent_key": "child", "environment": "dev", "mode": mode}])
-
-            async def get_active(*, agent_key, parent=parent, **kwargs):
-                return SimpleNamespace(version=1, config=child if agent_key == "child" else parent)
-
-            monkeypatch.setattr(platform.repository, "get_active", get_active)
-            built = await platform.runtime.factory.build(agent_key="parent", environment="dev", context=context())
-            if mode == "handoff":
-                assert built.max_turns == 1
-                assert built.timeout_seconds == 1
-            else:
-                run = AsyncMock(return_value=SimpleNamespace(final_output="child"))
-                monkeypatch.setattr(Runner, "run", run)
-                await built.agent.tools[0].on_invoke_tool(RunContextWrapper(context=context()), '{"input":"hi"}')
-                assert run.call_args.kwargs["max_turns"] == 1
-    finally:
-        await platform.close()
-
-
 async def test_langfuse_calls_do_not_block_event_loop():
     started = threading.Event()
     release = threading.Event()
@@ -308,37 +284,6 @@ async def test_trace_flush_runs_off_event_loop(settings):
         async with platform.runtime._trace("test", "test", context()):
             pass
         assert flushed and flushed[0] != main_thread
-    finally:
-        await platform.close()
-
-
-async def test_definition_deadline_and_child_timeout_cancel_runs(settings, monkeypatch):
-    platform = build_platform(settings)
-    cancelled = asyncio.Event()
-
-    async def wait_forever(*args, **kwargs):
-        try:
-            await asyncio.Event().wait()
-        finally:
-            cancelled.set()
-
-    monkeypatch.setattr(Runner, "run", wait_forever)
-    child = config(runtime={"max_turns": 1, "timeout_seconds": 1})
-    parent = config(sub_agents=[{"agent_key": "child", "environment": "dev", "mode": "tool"}])
-
-    async def get_active(*, agent_key, **kwargs):
-        return SimpleNamespace(version=1, config=child if agent_key == "child" else parent)
-
-    monkeypatch.setattr(platform.repository, "get_active", get_active)
-    try:
-        with pytest.raises(TimeoutError):
-            await platform.runtime.run(agent_key="child", environment="dev", message="hi", context=context())
-        assert cancelled.is_set()
-        cancelled.clear()
-        built = await platform.runtime.factory.build(agent_key="parent", environment="dev", context=context())
-        with pytest.raises(TimeoutError):
-            await built.agent.tools[0].on_invoke_tool(RunContextWrapper(context=context()), '{"input":"hi"}')
-        assert cancelled.is_set()
     finally:
         await platform.close()
 

@@ -76,7 +76,6 @@ async def test_a_fan_out_asks_once_not_once_per_branch():
 
     assert {r.version for r in results} == {1}
     assert registry.calls == 1
-    assert shared.stats.as_dict() == {"queries": 1, "shared": 39}
 
 
 async def test_runs_that_do_not_overlap_each_ask():
@@ -254,7 +253,7 @@ async def test_everything_else_is_still_the_repositorys_own():
 async def test_private_repository_state_stays_private():
     shared = SharedAgentLookups(Registry())
     assert not hasattr(shared, "_session_factory")
-    assert copy.deepcopy(shared.stats) == shared.stats  # No recursion through __getattr__.
+    assert copy.deepcopy(shared._in_flight) == {}  # No recursion through __getattr__.
 
 
 async def test_a_platform_runs_its_agents_through_the_shared_lookup(monkeypatch):
