@@ -47,7 +47,13 @@ Answer with: what was decided, why, and what the person can do next.
 
 
 def _run(coro):
-    return asyncio.run(coro)
+    """Run a command's work, reporting a bad argument as one rather than a traceback."""
+    from asas_agent.runtime.runner import RunInputError
+
+    try:
+        return asyncio.run(coro)
+    except RunInputError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _platform(require_prompts: bool = True):
@@ -384,7 +390,8 @@ def run(
             typer.echo(
                 f"\n{agent_key} v{result.agent_version}"
                 + (f", prompt v{result.prompt_version}" if result.prompt_version else "")
-                + (f", trace {result.trace_name}" + (f" {result.trace_id}" if result.trace_id else ""))
+                + f", trace {result.trace_name!r}"
+                + (f" ({result.trace_id})" if result.trace_id else "")
             )
         finally:
             await platform.close()

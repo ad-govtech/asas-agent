@@ -162,9 +162,11 @@ result = await platform.runtime.run(
 result.trace_name  # what to look for in Langfuse
 ```
 
-Without a name a run is `agent:<agent key>`, as before. The name reaches the Langfuse observation, the trace and the Agents SDK's own workflow name, and the correlation id groups a request's runs together. The agent is always a tag, so every branch of a fan-out is still findable as one agent.
+Without a name a run is `agent:<agent key>`, as before. The name reaches the Langfuse observation and the trace it opens; the agent is always a tag, and the correlation id is the session, so every branch of a fan-out is still findable as one agent and one request. A name is plain text: no control characters, no direction overrides, nothing invisible, at most 200 bytes, and never starting with `agent:`, which is how the runtime names a run of an agent and how a reader takes it.
 
-`trace_metadata` records your own fields beside what the runtime records itself: agent key and version, prompt name and version, which variables were filled, model, toolset and tenant. A request cannot overwrite those - a trace is evidence of what ran - and is refused if it tries. The same two fields exist on `POST /v1/agents/run`, and `--trace-name` on the CLI.
+`trace_metadata` records your own fields beside what the runtime records itself: agent key and version, prompt name and version, which variables were filled, model, toolset and tenant. Neither a request nor the application's own context can overwrite those - a trace is evidence of what ran - and either is refused if it tries. A call's fields win over the ones the application set, and their size is capped by `ASAS_TRACE_METADATA_MAX_BYTES` (16 KB), because every run ships them.
+
+Neither the name nor the metadata is given to the Agents SDK's own trace, which may be exported somewhere else entirely. The same two fields exist on `POST /v1/agents/run`, and `--trace-name` on the CLI.
 
 ## Rules the package enforces
 
@@ -218,7 +220,7 @@ ASAS_TRACING_PROVIDER=none
 
 The application must be able to reach that URL. For Langfuse Cloud, use `https://cloud.langfuse.com` (or your region's endpoint) and that project's keys.
 
-Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to the configured instance, including when prompts use files. `none` disables runtime tracing, including the Agents SDK's built-in trace export. `ASAS_TRACING=false` overrides the provider and disables tracing. There is no silent fallback when an explicitly selected provider is unavailable.
+Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to the configured instance, including when prompts use files. `none` disables runtime tracing, including the Agents SDK's built-in trace export. Choosing an internal backend never leaves an external one installed: if the span instrumentation is missing, or refuses to attach to the installed SDK version, the SDK's own exporter is removed rather than left pointing at OpenAI. `ASAS_TRACING=false` overrides the provider and disables tracing. There is no silent fallback when an explicitly selected provider is unavailable.
 
 **Existing deployments:** set `ASAS_PROMPT_PROVIDER=langfuse` explicitly and install the extra to retain Langfuse prompts. Set `ASAS_TRACING_PROVIDER=langfuse` to retain tracing. Previously published file definitions are not rewritten: they continue reading files until replaced by a newly published version. Switching providers does not convert existing Langfuse version references; create new drafts referencing files to migrate those agents.
 
@@ -233,6 +235,7 @@ Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to t
 | `ASAS_PROMPT_DIR` | Prompt folder for file drafts (default: `prompts`) |
 | `ASAS_TRACING_PROVIDER` | `none` (default) or `langfuse`, independent of prompts |
 | `ASAS_PROMPT_VARIABLES_MAX_BYTES` | Ceiling on a request's prompt variables (default: 256000) |
+| `ASAS_TRACE_METADATA_MAX_BYTES` | Ceiling on the trace fields a run attaches (default: 16000) |
 | `ASAS_DEFINITION_CACHE_SECONDS` | How long a run may reuse an environment binding, and so how quickly a rollback lands (default: 5; 0 disables) |
 | `ASAS_DEFINITION_CACHE_SIZE` | How many agent/environment pairs to keep (default: 256) |
 | `ASAS_TRACING` | Set `false` to disable tracing regardless of provider |

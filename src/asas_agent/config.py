@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     timeout_ceiling_seconds: int = Field(default=300, ge=1, alias="ASAS_TIMEOUT_CEILING")
     #: Caller-supplied prompt variables reach the system instructions, which are re-sent every turn.
     prompt_variables_max_bytes: int = Field(default=256_000, ge=1, alias="ASAS_PROMPT_VARIABLES_MAX_BYTES")
+    #: Trace fields a caller attaches to a run. Every run ships them to the trace backend.
+    trace_metadata_max_bytes: int = Field(default=16_000, ge=1, alias="ASAS_TRACE_METADATA_MAX_BYTES")
 
     # How long a run may reuse the version an environment is bound to. This is
     # how quickly a promotion or a rollback reaches a running process. 0 reads

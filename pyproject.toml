@@ -25,7 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 langfuse = ["langfuse>=3.7,<4"]
-tracing = ["langfuse>=3.7,<4", "openinference-instrumentation-openai-agents>=0.1.20"]
+tracing = ["langfuse>=3.7,<4", "openinference-instrumentation-openai-agents>=0.1.20,<2"]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=1.0",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import unicodedata
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any
@@ -12,8 +13,11 @@ from asas_agent.integrations.prompts import PromptMessage
 from asas_agent.runtime.context import RuntimeContext
 from asas_agent.runtime.factory import AgentFactory
 
-#: What a trace name may be. Long enough for a prompt name and a discriminator.
-TRACE_NAME_MAX_LENGTH = 200
+#: What a trace name may be, in bytes, because that is what a backend stores.
+TRACE_NAME_MAX_BYTES = 200
+
+#: Names the runtime gives its own runs. A request cannot claim one.
+RUNTIME_NAME_PREFIX = "agent:"
 
 #: Facts the runtime records itself. A caller cannot overwrite them in a trace.
 RESERVED_TRACE_KEYS = frozenset(
@@ -43,24 +47,44 @@ def _trace_name(name: str | None, agent_key: str) -> str:
     A product that fans out runs one agent many times over - once per rubric
     area, once per candidate - and needs to tell those runs apart afterwards,
     which is what an evaluation harness reads. Without a name, the agent's own.
+
+    The name is read by people and by tools, so it is plain text: no control
+    characters, no direction overrides, nothing invisible, and never the
+    `agent:` form the runtime gives its own runs.
     """
     if name is None:
-        return f"agent:{agent_key}"
+        return f"{RUNTIME_NAME_PREFIX}{agent_key}"
+
     cleaned = " ".join(name.split())
     if not cleaned:
         raise RunInputError("A trace name cannot be blank. Leave it out to use the agent's own name.")
-    if len(cleaned) > TRACE_NAME_MAX_LENGTH:
-        raise RunInputError(f"A trace name is at most {TRACE_NAME_MAX_LENGTH} characters; this one is {len(cleaned)}.")
+
+    hidden = {c for c in cleaned if unicodedata.category(c) in {"Cc", "Cf"}}
+    if hidden:
+        raise RunInputError(
+            "A trace name cannot contain control or formatting characters: "
+            f"{', '.join(f'U+{ord(c):04X}' for c in sorted(hidden))}."
+        )
+
+    size = len(cleaned.encode("utf-8"))
+    if size > TRACE_NAME_MAX_BYTES:
+        raise RunInputError(f"A trace name is at most {TRACE_NAME_MAX_BYTES} bytes; this one is {size}.")
+
+    if cleaned.startswith(RUNTIME_NAME_PREFIX):
+        raise RunInputError(
+            f"A trace name cannot start with {RUNTIME_NAME_PREFIX!r}: that is how the runtime names a run of an "
+            "agent, and a reader takes it at its word. Name this run after what it is doing."
+        )
     return cleaned
 
 
-def _trace_extras(metadata: dict[str, Any] | None) -> dict[str, Any]:
-    """A caller's own trace fields, which may add to what the runtime records but never replace it."""
+def _trace_extras(metadata: dict[str, Any] | None, source: str) -> dict[str, Any]:
+    """Trace fields a caller supplies, which add to what the runtime records but never replace it."""
     extras = metadata or {}
-    reserved = sorted(RESERVED_TRACE_KEYS & set(extras))
+    reserved = sorted(str(key) for key in RESERVED_TRACE_KEYS & set(extras))
     if reserved:
         raise RunInputError(
-            f"The runtime records {', '.join(reserved)} itself, so a request cannot set them. "
+            f"The runtime records {', '.join(reserved)} itself, so {source} cannot set them. "
             "Use different names for your own trace fields."
         )
     return dict(extras)
@@ -122,6 +146,7 @@ class AgentRuntime:
         max_turns_ceiling: int = 20,
         timeout_ceiling_seconds: float = 300,
         prompt_variables_max_bytes: int = 256_000,
+        trace_metadata_max_bytes: int = 16_000,
         dependencies: dict[str, Any] | None = None,
     ):
         self.factory = factory
@@ -129,6 +154,7 @@ class AgentRuntime:
         self.max_turns_ceiling = max_turns_ceiling
         self.timeout_ceiling_seconds = timeout_ceiling_seconds
         self.prompt_variables_max_bytes = prompt_variables_max_bytes
+        self.trace_metadata_max_bytes = trace_metadata_max_bytes
         self.default_dependencies = dict(dependencies or {})
 
     async def run(
@@ -147,7 +173,8 @@ class AgentRuntime:
 
         if context.max_turns < 1 or context.timeout_seconds <= 0:
             raise ValueError("Runtime turn and timeout limits must be positive")
-        self._check_size(prompt_variables)
+        self._check_size(prompt_variables, "prompt variables", self.prompt_variables_max_bytes)
+        self._check_size(trace_metadata, "trace metadata", self.trace_metadata_max_bytes)
         name = _trace_name(trace_name, agent_key)
         context = replace(
             context,
@@ -155,9 +182,13 @@ class AgentRuntime:
             max_turns=min(context.max_turns, self.max_turns_ceiling),
             timeout_seconds=min(context.timeout_seconds, self.timeout_ceiling_seconds),
             dependencies={**self.default_dependencies, **context.dependencies},
-            # A caller's fields first: what the factory records about the run
-            # is written over them, and cannot be forged.
-            trace_metadata={**_trace_extras(trace_metadata), **context.trace_metadata},
+            # The application's own fields, then this call's, which are more
+            # specific. The factory writes what it knows over both, so neither
+            # can misreport which agent, version or prompt actually ran.
+            trace_metadata={
+                **_trace_extras(context.trace_metadata, "the runtime context"),
+                **_trace_extras(trace_metadata, "a request"),
+            },
         )
         started = asyncio.get_running_loop().time()
         async with asyncio.timeout(context.timeout_seconds) as deadline:
@@ -178,12 +209,11 @@ class AgentRuntime:
                     input=_run_input(built.prompt_messages, user_input, business_context),
                     context=context,
                     max_turns=built.max_turns,
-                    run_config=RunConfig(
-                        tracing_disabled=self._tracer is None,
-                        workflow_name=name,
-                        group_id=context.correlation_id,
-                        trace_metadata=dict(context.trace_metadata),
-                    ),
+                    # The name and the metadata belong to the observation this
+                    # run opens, not to the SDK's own trace: that one may be
+                    # exported elsewhere, and a request's data should not
+                    # follow it there.
+                    run_config=RunConfig(tracing_disabled=self._tracer is None),
                 )
 
         return AgentRunResult(
@@ -196,15 +226,16 @@ class AgentRuntime:
             toolset=list(built.config.tools),
         )
 
-    def _check_size(self, prompt_variables: dict[str, Any] | None) -> None:
-        """Prompt variables land in the instructions, which are re-sent on every turn."""
-        if not prompt_variables:
+    def _check_size(self, values: dict[str, Any] | None, what: str, limit: int) -> None:
+        """Both of these are sent on every run: one into the instructions, one to the trace backend."""
+        if not values:
             return
-        size = len(json.dumps(prompt_variables, ensure_ascii=False, default=str).encode("utf-8"))
-        if size > self.prompt_variables_max_bytes:
+        size = len(json.dumps(values, ensure_ascii=False, default=str).encode("utf-8"))
+        if size > limit:
+            setting = "ASAS_PROMPT_VARIABLES_MAX_BYTES" if "prompt" in what else "ASAS_TRACE_METADATA_MAX_BYTES"
             raise RunInputError(
-                f"The prompt variables are {size} bytes, over the {self.prompt_variables_max_bytes} byte limit. "
-                "Send large data as context, or raise ASAS_PROMPT_VARIABLES_MAX_BYTES."
+                f"The {what} are {size} bytes, over the {limit} byte limit. "
+                f"Send large data as context, or raise {setting}."
             )
 
     @asynccontextmanager

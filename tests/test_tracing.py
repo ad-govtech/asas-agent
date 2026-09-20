@@ -7,10 +7,11 @@ reading traces, or an evaluation harness that groups generations by name.
 
 from __future__ import annotations
 
+import inspect
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from agents import Runner
@@ -20,11 +21,17 @@ from asas_agent.config import Settings
 from asas_agent.registry.repository import AgentDefinition
 from asas_agent.registry.schema import AgentConfig
 from asas_agent.runtime.context import RuntimeContext
-from asas_agent.runtime.runner import TRACE_NAME_MAX_LENGTH, RunInputError
+from asas_agent.runtime.runner import TRACE_NAME_MAX_BYTES, RunInputError
+
+
+def _like_langfuse(method: str, kwargs: dict) -> None:
+    """Fail the way the real client would if we called it with arguments it does not take."""
+    langfuse = pytest.importorskip("langfuse")
+    inspect.signature(getattr(langfuse.Langfuse, method)).bind(None, **kwargs)
 
 
 class Tracer:
-    """A stand-in Langfuse client that records what it was told."""
+    """A stand-in Langfuse client that records what it was told, and only accepts what the real one does."""
 
     def __init__(self):
         self.observations: list[str] = []
@@ -33,10 +40,12 @@ class Tracer:
 
     @contextmanager
     def start_as_current_observation(self, **kwargs):
+        _like_langfuse("start_as_current_observation", kwargs)
         self.observations.append(kwargs.get("name"))
         yield SimpleNamespace(trace_id="trace-1")
 
     def update_current_trace(self, **kwargs):
+        _like_langfuse("update_current_trace", kwargs)
         self.traces.append(kwargs)
 
     def flush(self):
@@ -114,16 +123,22 @@ async def test_a_run_can_be_named_for_this_call(platform):
     assert "agent:scorer" in tracer.traces[0]["tags"]
 
 
-async def test_the_name_reaches_the_sdks_own_trace_too(platform):
+async def test_a_request_is_not_carried_into_the_sdks_own_trace(platform):
+    """The SDK's trace may be exported elsewhere, so a caller's name and fields stay out of it."""
+    tracer = Tracer()
+    platform.runtime._tracer = tracer
     try:
-        result = await run(platform, trace_name="score-summarizer")
+        await run(platform, trace_name="score-summarizer", trace_metadata={"candidate_id": "C-17"})
     finally:
         await platform.close()
 
     run_config = Runner.run.call_args.kwargs["run_config"]
-    assert run_config.workflow_name == "score-summarizer"
-    assert run_config.group_id == "REQ-1"  # The correlation id groups one request's runs.
-    assert result.trace_name == "score-summarizer"
+    assert run_config.workflow_name == "Agent workflow"  # The SDK's own default.
+    assert run_config.group_id is None
+    assert run_config.trace_metadata is None
+    # It all went to the observation this run opened instead.
+    assert tracer.observations == ["score-summarizer"]
+    assert tracer.traces[0]["metadata"]["candidate_id"] == "C-17"
 
 
 @pytest.mark.parametrize(
@@ -140,7 +155,7 @@ async def test_a_name_is_tidied_before_it_is_recorded(platform, name, expected):
         await platform.close()
 
 
-@pytest.mark.parametrize("name", ["", "   ", "x" * (TRACE_NAME_MAX_LENGTH + 1)])
+@pytest.mark.parametrize("name", ["", "   ", "x" * (TRACE_NAME_MAX_BYTES + 1)])
 async def test_a_name_that_cannot_be_used_is_refused(platform, name):
     try:
         with pytest.raises(RunInputError):
@@ -250,3 +265,208 @@ async def test_the_api_refuses_a_name_or_field_it_cannot_record(platform):
 
     assert response.status_code == 400
     assert "agent_version" in response.json()["detail"]
+
+
+# ----- a name is read by people and by tools -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "scorer\x1b[2Jwiped",  # An escape sequence that rewrites a terminal.
+        "scorer\x00",
+        "scorer-‮yrevileD",  # A direction override, which reverses what is displayed.
+        "scor​er",  # A zero-width space, which hides a difference.
+    ],
+)
+async def test_a_name_that_would_deceive_a_reader_is_refused(platform, name):
+    try:
+        with pytest.raises(RunInputError, match="control or formatting"):
+            await run(platform, trace_name=name)
+    finally:
+        await platform.close()
+
+
+async def test_a_request_cannot_name_its_run_after_another_agent(platform):
+    """`agent:<key>` is how the runtime names a run, and a harness reads it as such."""
+    try:
+        with pytest.raises(RunInputError, match="cannot start with"):
+            await run(platform, trace_name="agent:payroll-approver")
+    finally:
+        await platform.close()
+
+
+async def test_a_name_is_measured_in_bytes_because_that_is_what_is_stored(platform):
+    try:
+        assert (await run(platform, trace_name="é" * 100)).trace_name == "é" * 100  # 200 bytes.
+        with pytest.raises(RunInputError, match="at most 200 bytes"):
+            await run(platform, trace_name="é" * 101)
+    finally:
+        await platform.close()
+
+
+async def test_trace_metadata_larger_than_the_ceiling_is_refused(platform):
+    try:
+        with pytest.raises(RunInputError, match="trace metadata"):
+            await run(platform, trace_metadata={"document": "x" * 20_000})
+    finally:
+        await platform.close()
+
+
+# ----- what the runtime records is its own ---------------------------------------------
+
+
+def test_every_field_the_factory_records_is_reserved():
+    """The two lists live in different files; this is what keeps them together."""
+    import ast
+    from pathlib import Path
+
+    from asas_agent.runtime.runner import RESERVED_TRACE_KEYS
+
+    source = Path("src/asas_agent/runtime/factory.py").read_text(encoding="utf-8")
+    written = {
+        key.value
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "update"
+        for argument in node.args
+        if isinstance(argument, ast.Dict)
+        for key in argument.keys
+        if isinstance(key, ast.Constant)
+    }
+
+    assert written, "the factory no longer records trace metadata where this test looks for it"
+    assert written <= RESERVED_TRACE_KEYS
+
+
+@pytest.mark.parametrize("key", ["agent_version", "tenant_id"])
+async def test_the_application_cannot_rewrite_them_either(platform, key):
+    """Not only a request: an embedding application's context is checked the same way."""
+    try:
+        with pytest.raises(RunInputError, match=key):
+            await platform.runtime.run(
+                agent_key="scorer",
+                environment="dev",
+                user_input="hi",
+                context=context(trace_metadata={key: "forged"}),
+            )
+    finally:
+        await platform.close()
+
+
+async def test_a_call_is_more_specific_than_the_application_it_runs_in(platform):
+    tracer = Tracer()
+    platform.runtime._tracer = tracer
+    try:
+        await platform.runtime.run(
+            agent_key="scorer",
+            environment="dev",
+            user_input="hi",
+            trace_metadata={"area": "Delivery"},
+            context=context(trace_metadata={"area": "unset", "deployment": "blue"}),
+        )
+    finally:
+        await platform.close()
+
+    metadata = tracer.traces[0]["metadata"]
+    assert metadata["area"] == "Delivery"
+    assert metadata["deployment"] == "blue"
+
+
+async def test_a_fan_out_sharing_one_context_keeps_its_branches_apart(platform):
+    """Forty runs of one agent, one context object between them."""
+    import asyncio
+
+    tracer = Tracer()
+    platform.runtime._tracer = tracer
+    shared = context()
+    try:
+        await asyncio.gather(
+            *(
+                platform.runtime.run(
+                    agent_key="scorer",
+                    environment="dev",
+                    user_input="hi",
+                    trace_name=f"candidate-job-scorer-{i}",
+                    trace_metadata={"area": f"area-{i}"},
+                    context=shared,
+                )
+                for i in range(40)
+            )
+        )
+    finally:
+        await platform.close()
+
+    assert sorted(tracer.observations) == sorted(f"candidate-job-scorer-{i}" for i in range(40))
+    recorded = {trace["metadata"]["area"] for trace in tracer.traces}
+    assert recorded == {f"area-{i}" for i in range(40)}
+    assert shared.trace_metadata == {}
+
+
+# ----- the interfaces around a run -----------------------------------------------------
+
+
+def test_the_cli_names_a_run_and_says_what_it_used(monkeypatch):
+    from typer.testing import CliRunner
+
+    from asas_agent.cli.main import app as cli_app
+
+    run_agent = AsyncMock(
+        return_value=SimpleNamespace(
+            output="done",
+            agent_version=2,
+            prompt_version=None,
+            trace_id="TRACE-1",
+            trace_name="score summarizer",
+            toolset=[],
+        )
+    )
+    stub = SimpleNamespace(runtime=SimpleNamespace(run=run_agent), close=AsyncMock())
+    monkeypatch.setattr("asas_agent.cli.main._platform", lambda *a, **k: stub)
+
+    result = CliRunner().invoke(cli_app, ["run", "scorer", "hi", "--trace-name", "score summarizer"])
+    assert result.exit_code == 0, result.output
+    assert run_agent.call_args.kwargs["trace_name"] == "score summarizer"
+    # A name may contain spaces, so the id has to stay separable.
+    assert "trace 'score summarizer' (TRACE-1)" in result.output
+
+
+def test_the_cli_reports_an_unusable_name_as_a_bad_argument(monkeypatch):
+    from typer.testing import CliRunner
+
+    from asas_agent.cli.main import app as cli_app
+
+    stub = SimpleNamespace(
+        runtime=SimpleNamespace(run=AsyncMock(side_effect=RunInputError("blank"))), close=AsyncMock()
+    )
+    monkeypatch.setattr("asas_agent.cli.main._platform", lambda *a, **k: stub)
+
+    result = CliRunner().invoke(cli_app, ["run", "scorer", "hi", "--trace-name", "   "])
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+
+
+def test_choosing_an_internal_trace_backend_never_leaves_an_external_one_installed(settings, monkeypatch):
+    """`instrument()` reports a version mismatch by logging, so a caller must check, not assume."""
+    import sys
+
+    from agents.tracing import get_trace_provider
+
+    from asas_agent.bootstrap import _build_tracer
+
+    monkeypatch.setattr("asas_agent.bootstrap.langfuse_client", MagicMock())
+    settings.tracing_provider = "langfuse"
+
+    class Instrumentor:
+        def instrument(self, **kwargs):
+            return None  # Attached to nothing, and said so only in a log line.
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openinference.instrumentation.openai_agents",
+        SimpleNamespace(OpenAIAgentsInstrumentor=Instrumentor),
+    )
+
+    _build_tracer(settings)
+
+    processors = get_trace_provider()._multi_processor._processors
+    assert processors == (), "the SDK's own exporter was left in place"
