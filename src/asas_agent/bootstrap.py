@@ -48,24 +48,20 @@ def _build_tracer(settings: Settings):
         return None
 
     client = langfuse_client(settings)
-
-    if not _instrument_spans():
-        # Whatever the reason - the package is missing, or it refused to attach
-        # to this version of the SDK - the Agents SDK is left with its default
-        # processor, which posts traces to OpenAI. Choosing an internal trace
-        # backend must never turn on an external one, so clear it.
-        from agents import set_trace_processors
-
-        set_trace_processors([])
-
+    _instrument_spans()
+    # Whether or not the instrumentation attached, and whatever else this
+    # process has already installed, nothing may still be posting traces to
+    # OpenAI: choosing an internal backend must never turn on an external one.
+    _stop_exporting_to_openai()
     return client
 
 
 def _instrument_spans() -> bool:
     """Route the SDK's own spans to the configured backend. True if that worked.
 
-    `instrument()` reports a version mismatch by logging and returning, so the
-    only trustworthy check is whether a processor was actually installed.
+    `instrument()` reports both a version mismatch and an already-instrumented
+    process by logging and returning, so the only trustworthy check is whether
+    a processor of its own is installed afterwards.
     """
     try:
         from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
@@ -77,11 +73,39 @@ def _instrument_spans() -> bool:
     except Exception:  # noqa: BLE001 - any failure here means "not instrumented"
         return False
 
+    return any(_is_internal(processor) for processor in _processors())
+
+
+def _stop_exporting_to_openai() -> None:
+    """Remove any processor posting to OpenAI's trace backend, and leave the rest alone.
+
+    `instrument(exclusive_processor=True)` does not make the list exclusive in
+    a process that was already instrumented without it: it logs and returns,
+    leaving the SDK's own exporter beside the one that was added. What another
+    library installed is its business; what reaches OpenAI is ours.
+    """
+    keep = [processor for processor in _processors() if not _exports_to_openai(processor)]
+    if len(keep) != len(_processors()):
+        from agents import set_trace_processors
+
+        set_trace_processors(keep)
+
+
+def _processors() -> tuple[Any, ...]:
     from agents.tracing import get_trace_provider
 
-    installed = getattr(get_trace_provider(), "_multi_processor", None)
-    processors = getattr(installed, "_processors", ())
-    return any(type(processor).__module__.startswith("openinference") for processor in processors)
+    multi = getattr(get_trace_provider(), "_multi_processor", None)
+    return tuple(getattr(multi, "_processors", ()))
+
+
+def _is_internal(processor: Any) -> bool:
+    return type(processor).__module__.startswith("openinference")
+
+
+def _exports_to_openai(processor: Any) -> bool:
+    from agents.tracing.processors import BackendSpanExporter
+
+    return isinstance(getattr(processor, "_exporter", None), BackendSpanExporter)
 
 
 def build_platform(
