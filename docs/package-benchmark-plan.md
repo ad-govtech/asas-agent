@@ -1,9 +1,16 @@
-# CV Review CLI — plan
+# Package benchmark — plan
 
 A real application built on `asas-agent`, to find out what the package is like
 to use before a product commits to it. It is deliberately the same shape as the
 work the AI engine does today: read a CV, judge it against a role, compare
 candidates.
+
+**This is a benchmark of the package, not the CV review application's own
+specification.** That application has its own agreed requirements - a five-part
+assessment, a `Good fit` / `Possible fit` / `Not a fit` verdict, and actionable
+questions about what is missing - which this does not attempt to restate or
+replace. What follows exercises the runtime; what that application owes its
+users is a separate document.
 
 The application lives outside this repository. The package should be usable by
 something that is not an example inside it.

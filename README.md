@@ -41,21 +41,42 @@ asas-agent serve                        # POST /v1/agents/run on :8080
 
 ## Setting it up from your service
 
-An application creates the registry tables and publishes its agents as part of
-its own start-up, rather than asking an operator to run the CLI:
+Creating the tables and releasing an agent are **deployment steps, not start-up
+steps.** Run them from a command your deployment invokes, or a migration job:
 
 ```python
 from asas_agent import build_platform, migrate
 
-migrate()                      # before the event loop: it runs one of its own
-platform = build_platform()
-await platform.repository.release(
-    agent_key="customer-advisor",
-    config=AgentConfig.model_validate(definition_json),
-    environment="production",
-    created_by="deploy",       # adds a version, publishes it, makes it live
-)
+def deploy() -> None:                 # a command, run once per release
+    migrate()                         # before the event loop: it runs one of its own
+    asyncio.run(_release())
+
+async def _release() -> None:
+    platform = build_platform()
+    await platform.repository.release(
+        agent_key="customer-advisor",
+        config=AgentConfig.model_validate(definition_json),
+        environment="production",
+        created_by="deploy",
+    )
 ```
+
+Ordinary start-up constructs the platform and nothing else:
+
+```python
+platform = build_platform()           # every process, every restart
+```
+
+**`release()` is not idempotent.** Every call adds a version, publishes it, and
+points the environment at it. A service that released on every start would undo
+a deliberate rollback the next time a container restarted, and would publish
+whatever prompt files that container happened to have.
+
+Its three steps commit separately, so a failure can leave work behind: a
+definition refused at publication leaves the draft, and a failure at binding
+leaves a published version the environment does not run. Neither is harmful -
+a draft runs nowhere, and an unbound version runs nowhere - and both are visible
+in `asas-agent agent list`.
 
 ## Using it from your service
 

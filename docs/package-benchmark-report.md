@@ -1,8 +1,13 @@
-# CV Review CLI — what building it found
+# Package benchmark — what building an application on this found
 
 A real application built on `asas-agent`, to the plan in
-[cv-review-cli-plan.md](cv-review-cli-plan.md), outside this repository at
-`cv-review/`. Three agents, one tool, five CVs, eight scenarios.
+[package-benchmark-plan.md](package-benchmark-plan.md), outside this repository
+at `cv-review/`. Three agents, one tool, five CVs, eight scenarios.
+
+It exercises the package. The CV review application's own contract - the
+five-part assessment, the `Good fit` / `Possible fit` / `Not a fit` verdict, and
+the questions it must raise about missing information - is tracked with that
+application, and the outstanding acceptance tests are listed at the end.
 
 **Result: 8/8 scenarios pass.** Two gaps in the package were found by building
 it, both fixed and both in a pull request. Nothing in the application works
@@ -102,10 +107,47 @@ nothing else:
 MODEL_GATEWAY_URL=https://api.core42.ai/v1   MODEL_GATEWAY_KEY=...
 ```
 
-What would change: the prose in `evidence` and `gaps`, and the ranking order
-where candidates are close. What would not: the schemas, the tool call, the
-version in force, or the error a bad answer produces — those are the package's,
-and they are what these scenarios pin.
+What would change: the prose in `evidence` and `gaps`, the ranking order where
+candidates are close, and **whether the tool is called at all**. The runtime
+offers `role.requirements`; it does not compel a model to use it, so scenario 3
+shows that the tool loop works when a model asks for it, not that a real model
+will ask. If fetching the requirements is business logic rather than a choice,
+an application should load them and pass them in, which is what this package's
+context-first design is for.
+
+What would not change: the schemas, the version in force, and the error a bad
+answer produces - those are the package's, and they are what these scenarios
+pin.
+
+## Reproducing this
+
+The application is at `cv-review/` outside this repository: `cv_review/` for the
+three agents and the CLI, `agents/` and `prompts/agents/` for the definitions
+and prompts, `fixtures/cvs/` for the five CVs, `model_server.py` for the
+deterministic endpoint, and `scenarios.py` for all eight scenarios.
+
+```bash
+docker compose up -d postgres            # in the asas-agent checkout
+createdb cvreview                        # or any Postgres
+uv pip install -e /path/to/asas-agent -e .
+python model_server.py &                 # the deterministic endpoint, port 8110
+cv-review setup                          # migrate and release the three agents
+python scenarios.py                      # the eight scenarios, with their numbers
+```
+
+It needs the `.env` shown in the repository: file prompts, no Langfuse, and
+`MODEL_GATEWAY_URL=http://127.0.0.1:8110`.
+
+## Outstanding acceptance tests
+
+Against the CV review application's own agreed contract, rather than this
+benchmark:
+
+- a `Good fit` / `Possible fit` / `Not a fit` verdict, rather than
+  shortlist/hold/reject;
+- an assessment across expertise, academic rigour, achievements, soft skills
+  and fit to the job, rather than one recommendation with evidence;
+- actionable questions about what is missing or needs validating.
 
 ## Would a product build on this?
 
