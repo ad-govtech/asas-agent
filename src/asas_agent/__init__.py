@@ -7,6 +7,7 @@ and runs it on the OpenAI Agents SDK, with file prompts or optional Langfuse.
 
 from asas_agent.bootstrap import Platform, build_platform, build_runtime
 from asas_agent.config import Settings, get_settings
+from asas_agent.migrate import migrate
 from asas_agent.registry.capabilities import capability
 from asas_agent.registry.capabilities import registry as capability_registry
 from asas_agent.registry.outputs import output_schema
@@ -27,6 +28,7 @@ __all__ = [
     "capability",
     "capability_registry",
     "get_settings",
+    "migrate",
     "output_registry",
     "output_schema",
 ]

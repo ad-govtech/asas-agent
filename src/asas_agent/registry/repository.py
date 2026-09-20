@@ -217,6 +217,36 @@ class AgentRepository:
                 )
             )
 
+    async def release(
+        self,
+        *,
+        agent_key: str,
+        config: AgentConfig,
+        environment: Environment,
+        created_by: str,
+    ) -> AgentDefinition:
+        """Add a version, publish it, and make it the one this environment runs.
+
+        The three steps an application performs to ship an agent, in the order
+        that keeps each one's guarantees: a draft is validated when published,
+        and only a published version can be bound to an environment.
+
+        This is a deployment step. It is not idempotent - every call adds a
+        version and moves the environment to it - and its three steps commit
+        separately, so a definition refused at publication leaves its draft
+        behind, and a failure at binding leaves a published version nothing
+        runs. Neither is reachable by a request.
+        """
+        definition = await self.create_draft(agent_key=agent_key, config=config, created_by=created_by)
+        published = await self.publish(agent_key=agent_key, version=definition.version)
+        await self.bind(
+            agent_key=agent_key,
+            environment=environment,
+            version=definition.version,
+            updated_by=created_by,
+        )
+        return published
+
     async def get_active(self, *, agent_key: str, environment: Environment) -> AgentDefinition:
         """The version this environment runs. The runtime calls this on every request."""
         async with self._session_factory() as session:
