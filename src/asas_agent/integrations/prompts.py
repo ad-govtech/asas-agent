@@ -13,7 +13,6 @@ in the text for the model to read.
 from __future__ import annotations
 
 import asyncio
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -22,7 +21,7 @@ from asas_agent.config import Settings
 from asas_agent.registry.schema import PromptMessageRef, PromptRef
 
 #: `{{ name }}`, the placeholder syntax Langfuse uses.
-_VARIABLE = re.compile(r"{{\s*(\w+)\s*}}")
+_OPENING, _CLOSING = "{{", "}}"
 
 #: Roles a prompt may use. `system` and `developer` become instructions.
 INSTRUCTION_ROLES = ("system", "developer")
@@ -37,6 +36,10 @@ class PromptError(RuntimeError):
 
 class PromptVariableError(PromptError):
     """Raised when a placeholder has no value. The caller can fix this; the prompt is fine."""
+
+
+class PromptShapeError(PromptError):
+    """Raised when a prompt cannot instruct an agent. Configuration is wrong, not the service."""
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,8 @@ class ResolvedPrompt:
     version: int | None
     instructions: str
     messages: tuple[PromptMessage, ...] = ()
+    #: The placeholder names this prompt required, for the trace. Not their values.
+    filled: tuple[str, ...] = ()
 
     @property
     def text(self) -> str:
@@ -102,69 +107,107 @@ def _as_messages(compiled: Any, prompt_name: str) -> tuple[tuple[PromptMessage, 
                 "Chat placeholders are not supported; use variables instead."
             )
         role = _check_role(str(message["role"]), prompt_name)
-        messages.append(PromptMessage(role=role, content=str(message["content"])))
+        content = message["content"]
+        if not isinstance(content, str):
+            raise PromptError(
+                f"Prompt {prompt_name!r} has a {role} message whose content is {type(content).__name__}, not text. "
+                "This runtime sends text; write the message as a string."
+            )
+        messages.append(PromptMessage(role=role, content=content))
 
     if not messages:
         raise PromptError(f"Prompt {prompt_name!r} has no messages")
     return tuple(messages), True
 
 
-def render(template: PromptTemplate, variables: dict[str, Any]) -> ResolvedPrompt:
-    """Fill placeholders, then split instructions from the opening messages."""
-    rendered = tuple(
-        PromptMessage(role=message.role, content=_fill(message.content, variables, template.name))
-        for message in template.messages
-    )
-    return _split(template, rendered)
+def _next_variable(content: str, start: int) -> tuple[str, int, int] | None:
+    """Langfuse's rule: find `{{`, take the next `}}`, strip what is between."""
+    opened = content.find(_OPENING, start)
+    if opened == -1:
+        return None
+    closed = content.find(_CLOSING, opened)
+    if closed == -1:
+        return None
+    return content[opened + len(_OPENING) : closed].strip(), opened, closed + len(_CLOSING)
 
 
-def _fill(text: str, variables: dict[str, Any], prompt_name: str) -> str:
-    missing: list[str] = []
+def variable_names(content: str) -> list[str]:
+    names, cursor = [], 0
+    while cursor < len(content):
+        found = _next_variable(content, cursor)
+        if not found:
+            break
+        names.append(found[0])
+        cursor = found[2]
+    return names
 
-    def substitute(match: re.Match[str]) -> str:
-        name = match.group(1)
+
+def _fill(content: str, variables: dict[str, Any]) -> str:
+    """Substitute once, left to right. A value is never scanned for placeholders of its own."""
+    out, cursor = [], 0
+    while cursor < len(content):
+        found = _next_variable(content, cursor)
+        if not found:
+            out.append(content[cursor:])
+            break
+        name, opened, closed = found
+        out.append(content[cursor:opened])
         if name in variables:
-            return str(variables[name])
-        missing.append(name)
-        return match.group(0)
+            value = variables[name]
+            # `None` renders as nothing, and every other value through `str()`,
+            # which is what Langfuse does. A prompt reads the same either way.
+            out.append("" if value is None else str(value))
+        else:
+            out.append(content[opened:closed])
+        cursor = closed
+    return "".join(out)
 
-    filled = _VARIABLE.sub(substitute, text)
+
+def render(template: PromptTemplate, variables: dict[str, Any]) -> ResolvedPrompt:
+    """Fill every placeholder, then split instructions from the opening messages."""
+    required = {name for message in template.messages for name in variable_names(message.content)}
+    missing = sorted(required - set(variables))
     if missing:
         raise PromptVariableError(
-            f"Prompt {prompt_name!r} needs values for: {', '.join(sorted(set(missing)))}. "
+            f"Prompt {template.name!r} needs values for: {', '.join(missing)}. "
             "Pass them as prompt variables, in the definition or with the request."
         )
-    return filled
+
+    rendered = tuple(
+        PromptMessage(role=message.role, content=_fill(message.content, variables)) for message in template.messages
+    )
+    return _split(template, rendered, filled=tuple(sorted(required)))
 
 
-def _split(template: PromptTemplate, messages: tuple[PromptMessage, ...]) -> ResolvedPrompt:
-    """System and developer messages become instructions; user and assistant messages open the run."""
-    instructions = "\n\n".join(m.content for m in messages if m.role in INSTRUCTION_ROLES)
+def _split(
+    template: PromptTemplate, messages: tuple[PromptMessage, ...], filled: tuple[str, ...] = ()
+) -> ResolvedPrompt:
+    """System and developer messages instruct the agent; user and assistant messages open the run."""
+    instructions = "\n\n".join(m.content for m in messages if m.role in INSTRUCTION_ROLES and m.content.strip())
     opening = tuple(m for m in messages if m.role in MESSAGE_ROLES)
 
+    if not any(m.role in INSTRUCTION_ROLES for m in messages):
+        raise PromptShapeError(
+            f"Prompt {template.name!r} has no system message, so the agent would have no instructions."
+        )
     if not instructions:
-        raise PromptError(f"Prompt {template.name!r} has no system message, so the agent would have no instructions.")
+        raise PromptShapeError(f"Prompt {template.name!r} has a system message, but it is empty.")
+
+    first_message = next((i for i, m in enumerate(messages) if m.role in MESSAGE_ROLES), len(messages))
+    trailing = [m.role for m in messages[first_message:] if m.role in INSTRUCTION_ROLES]
+    if trailing:
+        raise PromptShapeError(
+            f"Prompt {template.name!r} puts a {trailing[0]} message after a user or assistant message. "
+            "Instructions are hoisted out of the conversation, so write them first."
+        )
+
     return ResolvedPrompt(
         name=template.name,
         version=template.version,
         instructions=instructions,
         messages=opening,
+        filled=filled,
     )
-
-
-def _require_values(template_messages: tuple[PromptMessage, ...], variables: dict[str, Any], prompt_name: str) -> None:
-    """Check the template's placeholders, before anything is substituted.
-
-    What a value contains is never inspected: a CV or a job description may
-    legitimately hold `{{...}}`, and that is not a placeholder of this prompt.
-    """
-    required = {name for message in template_messages for name in _VARIABLE.findall(message.content)}
-    missing = sorted(required - set(variables))
-    if missing:
-        raise PromptVariableError(
-            f"Prompt {prompt_name!r} needs values for: {', '.join(missing)}. "
-            "Pass them as prompt variables, in the definition or with the request."
-        )
 
 
 def merge_variables(ref: PromptRef, variables: dict[str, Any] | None) -> dict[str, Any]:
@@ -182,6 +225,13 @@ def merge_variables(ref: PromptRef, variables: dict[str, Any] | None) -> dict[st
             f"Prompt {ref.name!r} already sets {', '.join(frozen)} in the published definition. "
             "Publish a new version to change it; a request cannot."
         )
+    if ref.request_variables is not None:
+        refused = sorted(set(request) - set(ref.request_variables))
+        if refused:
+            raise PromptVariableError(
+                f"Prompt {ref.name!r} does not accept {', '.join(refused)} from a request. "
+                f"It accepts: {', '.join(ref.request_variables) or 'nothing'}."
+            )
     return {**ref.variables, **request}
 
 
@@ -228,6 +278,8 @@ async def pin_prompt(ref: PromptRef, provider: PromptProvider | None) -> PromptR
         raise PromptError("A working prompt provider is required to publish an agent")
 
     template = await provider.template(ref)
+    # Substitution is not possible yet, but the shape is already decidable.
+    _split(template, template.messages)
     if template.version is not None:
         return PromptRef(name=ref.name, version=template.version, variables=ref.variables)
     if template.is_chat:
@@ -269,42 +321,10 @@ class LangfusePrompts:
         )
 
     async def resolve(self, ref: PromptRef, variables: dict[str, Any] | None = None) -> ResolvedPrompt:
-        values = merge_variables(ref, variables)
-        snapshot = _snapshot_template(ref)
-        if snapshot is not None:
-            return render(snapshot, values)
-        return await asyncio.to_thread(self._resolve, ref, values)
-
-    def _resolve(self, ref: PromptRef, values: dict[str, Any]) -> ResolvedPrompt:
-        prompt = self._fetch(ref)
-        self._require_values(prompt, values, ref.name)
-        # Langfuse renders its own templates, so the text matches what its UI shows.
-        compiled = prompt.compile(**values) if values else prompt.compile()
-        messages, is_chat = _as_messages(compiled, ref.name)
-        template = PromptTemplate(
-            name=ref.name,
-            version=getattr(prompt, "version", None),
-            messages=messages,
-            is_chat=is_chat,
-        )
-        return _split(template, messages)
-
-    def _require_values(self, prompt: Any, values: dict[str, Any], prompt_name: str) -> None:
-        """Check the unrendered template, so a value that contains `{{...}}` is never mistaken for one."""
-        raw = getattr(prompt, "prompt", None)
-        if raw is not None:
-            template_messages, _ = _as_messages(raw, prompt_name)
-            _require_values(template_messages, values, prompt_name)
-            return
-
-        required = getattr(prompt, "variables", None)
-        if required:
-            missing = sorted(set(required) - set(values))
-            if missing:
-                raise PromptVariableError(
-                    f"Prompt {prompt_name!r} needs values for: {', '.join(missing)}. "
-                    "Pass them as prompt variables, in the definition or with the request."
-                )
+        # Rendering is ours, not the SDK's: `compile()` cannot take a variable
+        # named `self`, and this way a file prompt and a Langfuse prompt with
+        # the same text render identically.
+        return render(await self.template(ref), merge_variables(ref, variables))
 
     def _fetch(self, ref: PromptRef):
         client = self._get_client()
@@ -340,8 +360,16 @@ class FilePrompts:
         if ref.label not in (None, "production"):
             raise PromptError("File prompts do not support labels. Reference the file by name.")
 
+        return await asyncio.to_thread(self._template, ref)
+
+    def _template(self, ref: PromptRef) -> PromptTemplate:
         chat_path = self._path(f"{ref.name}.chat.json")
-        if chat_path.exists():
+        try:
+            is_chat = chat_path.exists()
+        except OSError as exc:
+            raise PromptError(f"Cannot read prompt file at {chat_path}") from exc
+
+        if is_chat:
             return PromptTemplate(
                 name=ref.name,
                 version=None,

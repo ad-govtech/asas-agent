@@ -106,7 +106,13 @@ Placeholders are filled from two places:
 - `prompt.variables` in the agent definition, for values that are part of the published agent;
 - `prompt_variables` on the request, for values that belong to this call.
 
-A request may add values; it may not replace one the definition sets. Definition variables reach the system instructions, so a caller that could override one could rewrite a published agent's instructions. Publish a new version to change such a value.
+A definition can also name exactly what a request may fill:
+
+```json
+{"prompt": {"name": "agents/screening", "variables": {"entity": "DGE"}, "request_variables": ["application"]}}
+```
+
+With `request_variables` set, any other name from a request is refused. Leave it out and a request may fill any name the definition does not set. A request may add values; it may not replace one the definition sets. Definition variables reach the system instructions, so a caller that could override one could rewrite a published agent's instructions. Publish a new version to change such a value.
 
 ```python
 result = await platform.runtime.run(
@@ -121,7 +127,11 @@ The same values can be sent to the runtime API as `prompt_variables`, or from th
 
 A placeholder with no value is an error: the model is never handed a literal `{{application}}` to read. Only the prompt's own placeholders count, so a CV or a job description that contains `{{...}}` is passed through as the data it is.
 
-A sub-agent is filled from the same request variables as its parent. Its prompt may not carry user or assistant messages, because a sub-agent is handed its caller's input and has nowhere to put them; that is refused at build time rather than dropped. `user_input` and `context` still work with a chat prompt and arrive as a JSON message after the prompt's own, but only when the caller sends them.
+Request variables reach the system instructions, so treat them as content the model will follow: pass your own data, not text a member of the public wrote, and use `request_variables` to keep the surface small. Their total size is capped by `ASAS_PROMPT_VARIABLES_MAX_BYTES` (256 KB by default), because instructions are re-sent on every turn.
+
+Values render as Langfuse renders them: `str(value)`, and nothing at all for `None`. A file prompt and a Langfuse prompt with the same text produce the same call.
+
+A sub-agent is filled from the same request variables as its parent, minus any its own definition already sets. Its prompt may not carry user or assistant messages, because a sub-agent is handed its caller's input and has nowhere to put them; that is refused at build time rather than dropped. `user_input` and `context` still work with a chat prompt and arrive as a JSON message after the prompt's own, but only when the caller sends them.
 
 ## Rules the package enforces
 
@@ -133,7 +143,9 @@ A sub-agent is filled from the same request variables as its parent. Its prompt 
 - A missing production prompt is an error. The runtime never falls back to a draft.
 - A prompt variable with no value is an error, not a placeholder left in the text.
 - A request cannot replace a variable the published definition sets.
-- A chat prompt with no system message is refused: an agent without instructions is a bug.
+- A chat prompt with no system message, or with an empty one, is refused when it is published, not when it runs.
+- Instructions come first: a system message after a user or assistant message is refused, because instructions are hoisted out of the conversation.
+- A message whose content is not text is refused.
 
 ## Choose prompts and tracing
 
@@ -186,6 +198,7 @@ Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to t
 | `ASAS_PROMPT_PROVIDER` | `file` (default) or `langfuse` |
 | `ASAS_PROMPT_DIR` | Prompt folder for file drafts (default: `prompts`) |
 | `ASAS_TRACING_PROVIDER` | `none` (default) or `langfuse`, independent of prompts |
+| `ASAS_PROMPT_VARIABLES_MAX_BYTES` | Ceiling on a request's prompt variables (default: 256000) |
 | `ASAS_TRACING` | Set `false` to disable tracing regardless of provider |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` | Prompts and traces |
 | `OPENAI_API_KEY` | OpenAI models |

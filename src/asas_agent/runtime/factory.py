@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any
 
 from asas_agent.integrations.models import ModelError, ModelRegistry
@@ -89,7 +90,12 @@ class AgentFactory:
         config = definition.config
 
         async with asyncio.timeout_at(started + min(context.timeout_seconds, config.runtime.timeout_seconds)):
-            resolved_prompt = await self.prompts.resolve(config.prompt, prompt_variables)
+            # A sub-agent keeps whatever its own definition sets: the caller
+            # addressed the parent and cannot know a specialist's variables.
+            values = prompt_variables
+            if is_sub_agent and values:
+                values = {k: v for k, v in values.items() if k not in config.prompt.variables}
+            resolved_prompt = await self.prompts.resolve(config.prompt, values)
             if is_sub_agent and resolved_prompt.messages:
                 # A sub-agent is handed the caller's or the parent's input, so
                 # there is nowhere to put its own opening messages.
@@ -154,6 +160,12 @@ class AgentFactory:
                     "model_provider": config.model.provider,
                     "model_name": config.model.name,
                     "toolset": list(config.tools),
+                    # A request's values now help decide the instructions, so a
+                    # trace records which names were filled and a digest of the
+                    # text that resulted. The values themselves are the
+                    # caller's data and are not copied here.
+                    "prompt_variables": list(resolved_prompt.filled),
+                    "instructions_digest": sha256(resolved_prompt.instructions.encode("utf-8")).hexdigest()[:12],
                 }
             )
 
