@@ -68,16 +68,6 @@ class ModelRef(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
-class SubAgentRef(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    agent_key: str
-    environment: Environment = "production"
-    mode: Literal["tool", "handoff"]
-    tool_name: str | None = None
-    description: str | None = None
-
-
 class RuntimeLimits(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -106,8 +96,6 @@ class AgentConfig(BaseModel):
     model: ModelRef
 
     tools: list[str] = Field(default_factory=list)
-    sub_agents: list[SubAgentRef] = Field(default_factory=list)
-    guardrails: list[str] = Field(default_factory=list)
 
     runtime: RuntimeLimits = Field(default_factory=RuntimeLimits)
     output: OutputConfig = Field(default_factory=OutputConfig)
@@ -116,7 +104,4 @@ class AgentConfig(BaseModel):
     def _no_duplicate_tools(self) -> AgentConfig:
         if len(set(self.tools)) != len(self.tools):
             raise ValueError("The same tool is listed twice")
-        names = [s.tool_name or s.agent_key for s in self.sub_agents if s.mode == "tool"]
-        if len(set(names)) != len(names):
-            raise ValueError("Two sub-agents would be exposed under the same tool name")
         return self

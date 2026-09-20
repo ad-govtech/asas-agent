@@ -29,8 +29,10 @@ The runtime holds no business state and no session. Anything durable lives in Po
 | Prompt variables | The definition's values publish with the agent; the request's arrive per call, and are what the prompt asks for | A request's data cannot be frozen into a version, and what it may fill needs no configuration |
 | Shared lookups | Runs asking at the same moment share one query; nothing is kept afterwards | A fan-out asks the registry once, and a promotion is visible to the next run |
 | Tools | Named in configuration, implemented in the app | The database never carries code, URLs or credentials |
+| Delegation | Not supported | No product asked for it, and it brought a graph, cycle checks, per-child budgets and a lock on every promotion |
+| HTTP runtime | An optional extra | An application that embeds the runtime does not need a web framework |
 | Action tools | Refused unless the caller enables them | An LLM naming a tool is not authorization |
-| Models | Registry of providers, with a capability table | A model that cannot call tools is refused at publish, not mid-run |
+| Models | Registry of providers | What a model can do is the provider's business, and it says so itself |
 | Execution | OpenAI Agents SDK | The SDK is the engine; `AgentConfig` is our own format |
 | Tracing | Disabled by default; optional Langfuse configured separately from prompts | No observability service is required to run an agent |
 
@@ -38,12 +40,13 @@ The runtime holds no business state and no session. Anything durable lives in Po
 
 - **Capabilities.** Register a factory per tool name. The factory receives the request context and returns a thin adapter that calls your API with the caller's token.
 - **Output schemas.** Register a Pydantic model per name; the runtime passes it to the SDK as the output type.
-- **Guardrails.** Register input and output guardrails by name.
 - **Context.** Load what you already know the agent needs, and pass it in. The agent should not rediscover your data through tools.
 - **Authorization.** Always, in the owning service. The runtime propagates identity; it does not decide.
 
 ## Deliberately not in this version
 
+- Sub-agents, delegation and handoffs. One agent, one prompt, one model.
+- Guardrails. Nothing had ever registered one; an application checks its own inputs and outputs.
 - A visual agent builder. The CLI and the JSON definition are the interface for now.
 - Dynamic MCP discovery. MCP servers can be added as capabilities; discovering them from configuration is not supported.
 - Human approval workflows. `risk="action"` marks the tools that need one; the workflow belongs to the business service.
@@ -82,6 +85,6 @@ The guideline sketches a runtime API taking `input` plus a `business_context` ob
 
 ## Runtime and publication safeguards
 
-The runtime owns dependency merging, platform ceilings, and cancellation deadlines for every entry point. Tool sub-agents get individual turn/deadline limits; handoffs share the strictest chain limits because the SDK executes them in one run. Langfuse retrieval and flush calls run outside the event loop. Cancelled runs leave buffered spans to the SDK exporter instead of extending their deadline to flush.
+The runtime owns dependency merging, platform ceilings, and cancellation deadlines for every entry point. Langfuse retrieval and flush calls run outside the event loop. Cancelled runs leave buffered spans to the SDK exporter instead of extending their deadline to flush.
 
-Publication checks references and capabilities without invoking tool factories. Promotion revalidates the current graph. PostgreSQL transaction-scoped advisory locks serialize version allocation per agent, including the first draft; a registry-wide binding lock serializes graph changes to prevent concurrent promotions creating cycles. Neither operation changes the database schema.
+Publication resolves every name a definition uses without invoking a tool factory. A PostgreSQL transaction-scoped advisory lock serializes version allocation per agent, including the first draft. Promotion needs no lock of its own: a binding points at one published version and nothing else depends on it.

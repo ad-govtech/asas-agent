@@ -149,8 +149,6 @@ Prompts are cached: Langfuse's SDK keeps them for 60 seconds, and a prompt file 
 - Configuration names capabilities; it never carries code, SQL, URLs or secrets.
 - A tool that changes data is refused unless the caller enables action tools, and the owning service still authorizes the call.
 - Identity travels in the runtime context, never in prompt text.
-- A model that cannot call tools or return structured output is refused at publish time, not mid-conversation.
-- Sub-agents that reference each other in a loop are refused.
 - A missing production prompt is an error. The runtime never falls back to a draft.
 - A prompt variable with no value is an error, not a placeholder left in the text.
 - A request cannot replace a variable the published definition sets.
@@ -202,9 +200,9 @@ Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to t
 
 | Variable | Purpose |
 |---|---|
-| `ASAS_REGISTRATION_MODULES` | Comma-separated Python modules registering application tools, schemas, and guardrails before startup/publication |
+| `ASAS_REGISTRATION_MODULES` | Comma-separated Python modules registering application tools and output schemas before startup/publication |
 | `DATABASE_URL` | Postgres for the registry. `postgres://` and `?sslmode=require` are accepted |
-| `ASAS_API_KEY` | Required as `X-API-Key` on the runtime API when set |
+| `ASAS_API_KEY` | Required as `X-API-Key` on the runtime API when set (with the `server` extra) |
 | `ASAS_PROMPT_PROVIDER` | `file` (default) or `langfuse` |
 | `ASAS_PROMPT_DIR` | Prompt folder for file drafts (default: `prompts`) |
 | `ASAS_TRACING_PROVIDER` | `none` (default) or `langfuse`, independent of prompts |
@@ -220,6 +218,14 @@ Install the `tracing` extra for span-level Langfuse traces of every model and to
 uv add "asas-agent[tracing]"
 ```
 
+To run the runtime as a service of its own rather than embedding it, add the server extra:
+
+```bash
+uv add "asas-agent[server]"     # FastAPI and uvicorn, for `asas-agent serve`
+```
+
+An application that calls `build_platform()` in its own process needs neither.
+
 ## The thinking behind it
 
 - [The engineering guideline](docs/agent-as-configuration-guideline.md) this package was built to: the architecture, the design principles, the data model and the rules a governed agent platform follows.
@@ -228,7 +234,7 @@ uv add "asas-agent[tracing]"
 
 ## Publication and execution checks
 
-Publishing validates model capabilities/settings, registered tool/schema/guardrail names, and the sub-agent graph without executing tools or calling models. Promotion rechecks the graph because environment bindings may have changed. Register application components before calling `build_platform()`. For CLI usage, set `ASAS_REGISTRATION_MODULES`, for example `examples.recruiting.capabilities,examples.recruiting.schemas`. These are trusted application modules, never code from an agent definition.
+Publishing resolves every name a definition uses - its tools, its output schema, its model settings - without executing a tool or calling a model, so a draft that could not run is refused while it is still a draft. Register application components before calling `build_platform()`. For CLI usage, set `ASAS_REGISTRATION_MODULES`, for example `examples.recruiting.capabilities,examples.recruiting.schemas`. These are trusted application modules, never code from an agent definition.
 
 New model names require explicit capability metadata before publication and runtime use:
 
@@ -242,7 +248,7 @@ platform.models.capabilities["gateway:my-model"] = ModelCapabilities(
 
 `reasoning_effort` is translated to the SDK's `reasoning.effort`; unsupported settings are rejected. Model clients use the credentials from `Settings`, including `.env` values. The OpenAI client is constrained to the tested 2.29 series for compatibility with Agents SDK 0.8.
 
-Every runtime entry point applies the minimum of caller, definition, and platform limits. Deadlines include agent assembly and cancel pending async work. Tool sub-agents have their own bounded runs within the parent's deadline. Handoffs share one run and use the strictest limits in the handoff chain. `build_platform(dependencies=...)` supplies defaults to direct calls as well as HTTP requests; request dependencies override defaults without mutating them. HTTP deadline failures return 504 and exhausted turn budgets return 422.
+Every runtime entry point applies the minimum of caller, definition, and platform limits. Deadlines include agent assembly and cancel pending async work. `build_platform(dependencies=...)` supplies defaults to direct calls as well as HTTP requests; request dependencies override defaults without mutating them. HTTP deadline failures return 504 and exhausted turn budgets return 422.
 
 ## Development
 

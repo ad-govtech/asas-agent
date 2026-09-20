@@ -14,13 +14,11 @@
   "tools": [
     "candidate.history"
   ],
-  "sub_agents": [],
   "runtime": {
     "max_turns": 4,
     "timeout_seconds": 30
   },
   "output": {
     "schema": "interview_plan_v1"
-  },
-  "guardrails": []
+  }
 }

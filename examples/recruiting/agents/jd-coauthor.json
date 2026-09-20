@@ -15,13 +15,11 @@
     "requisition.lookup",
     "policy.search"
   ],
-  "sub_agents": [],
   "runtime": {
     "max_turns": 4,
     "timeout_seconds": 30
   },
   "output": {
     "schema": "job_description_v1"
-  },
-  "guardrails": []
+  }
 }

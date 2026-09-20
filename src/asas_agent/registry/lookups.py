@@ -21,21 +21,12 @@ the run after it is current.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from functools import partial
 from typing import Any
 
 from asas_agent.registry.repository import AgentDefinition, AgentRepository
 from asas_agent.registry.schema import Environment
-
-
-@dataclass
-class LookupStats:
-    queries: int = 0
-    shared: int = 0  # Runs that waited on another run's query instead of making their own.
-
-    def as_dict(self) -> dict[str, int]:
-        return {"queries": self.queries, "shared": self.shared}
 
 
 def _own_copy(definition: AgentDefinition) -> AgentDefinition:
@@ -58,7 +49,6 @@ class SharedAgentLookups:
     def __init__(self, repository: AgentRepository):
         self._repository = repository
         self._in_flight: dict[tuple[str, str], asyncio.Task[AgentDefinition]] = {}
-        self.stats = LookupStats()
 
     def __getattr__(self, name: str) -> Any:
         """Anything this class does not handle is the repository's own."""
@@ -75,10 +65,8 @@ class SharedAgentLookups:
         if task is not None:
             # This question is already being asked; wait for that answer rather
             # than opening another connection to ask it again.
-            self.stats.shared += 1
             return _own_copy(await asyncio.shield(task))
 
-        self.stats.queries += 1
         task = asyncio.create_task(self._repository.get_active(agent_key=agent_key, environment=environment))
         self._in_flight[key] = task
         # The query outlives the run that started it: a run that hits its

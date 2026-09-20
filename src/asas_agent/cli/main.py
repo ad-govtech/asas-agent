@@ -31,10 +31,8 @@ EXAMPLE_AGENT = {
     "prompt": {"name": "agents/customer-advisor", "label": "production"},
     "model": {"provider": "openai", "name": "gpt-5.6-sol", "settings": {}},
     "tools": [],
-    "sub_agents": [],
     "runtime": {"max_turns": 6, "timeout_seconds": 30},
     "output": {"schema": None},
-    "guardrails": [],
 }
 
 EXAMPLE_PROMPT = """You explain government decisions to the people they affect.
@@ -394,8 +392,14 @@ def serve(
     port: int = typer.Option(None, "--port"),
     reload: bool = typer.Option(False, "--reload"),
 ) -> None:
-    """Start the runtime API."""
-    import uvicorn
+    """Start the runtime API. Needs the `server` extra."""
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise typer.BadParameter(
+            'Serving the runtime over HTTP needs the server extra: uv pip install "asas-agent[server]". '
+            "An application that embeds the runtime does not need it."
+        ) from exc
 
     settings = get_settings()
     uvicorn.run(

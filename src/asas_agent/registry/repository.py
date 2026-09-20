@@ -23,7 +23,6 @@ from asas_agent.integrations.prompts import PromptProvider, pin_prompt
 
 from .capabilities import registry as capability_registry
 from .db import agent_definitions, agent_environment_bindings
-from .guardrails import registry as guardrail_registry
 from .outputs import registry as output_registry
 from .schema import AgentConfig, Environment
 from .validation import DefinitionValidator
@@ -71,7 +70,6 @@ class AgentRepository:
             models or ModelRegistry(settings=None),
             capability_registry,
             output_registry,
-            guardrail_registry,
         )
 
     async def create_draft(self, *, agent_key: str, config: AgentConfig, created_by: str) -> AgentDefinition:
@@ -160,7 +158,7 @@ class AgentRepository:
                 pinned_config.model_dump(by_alias=True) if pinned_config is not None else row.config
             )
 
-            await self._validate_config(session, agent_key, config)
+            await self._validate_config(agent_key, config)
             config.prompt = await pin_prompt(config.prompt, self._prompts)
             values: dict[str, Any] = {
                 "status": "published",
@@ -182,37 +180,12 @@ class AgentRepository:
 
         return AgentDefinition.from_row(updated)
 
-    async def _validate_config(
-        self, session, agent_key: str, config: AgentConfig, environment: Environment | None = None
-    ) -> None:
-        async def resolve_child(key: str, environment: str) -> AgentConfig:
-            child = (
-                await session.execute(
-                    select(agent_definitions.c.config)
-                    .join(
-                        agent_environment_bindings,
-                        (agent_environment_bindings.c.agent_key == agent_definitions.c.agent_key)
-                        & (agent_environment_bindings.c.agent_version == agent_definitions.c.version),
-                    )
-                    .where(
-                        agent_definitions.c.agent_key == key,
-                        agent_environment_bindings.c.environment == environment,
-                        agent_definitions.c.status == "published",
-                    )
-                )
-            ).one_or_none()
-            if child is None:
-                raise RegistryError(f"No published agent is bound to {key} in {environment}")
-            return AgentConfig.model_validate(child.config)
-
-        await self._validator.validate(config, agent_key=agent_key, environment=environment, resolve=resolve_child)
+    async def _validate_config(self, agent_key: str, config: AgentConfig) -> None:
+        await self._validator.validate(config, agent_key=agent_key)
 
     async def bind(self, *, agent_key: str, environment: Environment, version: int, updated_by: str) -> None:
         """Point an environment at a published version. This is promotion and rollback."""
         async with self._session_factory() as session, session.begin():
-            # Serialize graph changes so concurrent promotions cannot introduce a cycle.
-            lock_key = int.from_bytes(sha256(b"asas-agent:bindings").digest()[:8], signed=True)
-            await session.execute(select(func.pg_advisory_xact_lock(lock_key)))
             row = (
                 await session.execute(
                     select(agent_definitions.c.status, agent_definitions.c.config).where(
@@ -226,10 +199,6 @@ class AgentRepository:
                 raise RegistryError(f"{agent_key} v{version} does not exist")
             if row.status != "published":
                 raise RegistryError(f"{agent_key} v{version} is {row.status}. Publish it before binding an environment")
-
-            # Validate the graph as the binding about to exist, so a loop
-            # through this environment is caught before it can be created.
-            await self._validate_config(session, agent_key, AgentConfig.model_validate(row.config), environment)
 
             statement = pg_insert(agent_environment_bindings).values(
                 agent_key=agent_key,

@@ -15,13 +15,11 @@
     "policy.search",
     "candidate.history"
   ],
-  "sub_agents": [],
   "runtime": {
     "max_turns": 6,
     "timeout_seconds": 30
   },
   "output": {
     "schema": "screening_result_v1"
-  },
-  "guardrails": []
+  }
 }
