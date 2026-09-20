@@ -99,6 +99,7 @@ def build_platform(
         tracer=tracer,
         max_turns_ceiling=settings.max_turns_ceiling,
         timeout_ceiling_seconds=settings.timeout_ceiling_seconds,
+        prompt_variables_max_bytes=settings.prompt_variables_max_bytes,
         dependencies=dependencies,
     )
 

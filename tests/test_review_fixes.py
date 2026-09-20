@@ -261,7 +261,7 @@ async def test_langfuse_calls_do_not_block_event_loop():
         def get_prompt(self, *args, **kwargs):
             started.set()
             release.wait(timeout=1)
-            return SimpleNamespace(version=1, compile=lambda: "prompt")
+            return SimpleNamespace(version=1, prompt="prompt", compile=lambda: "prompt")
 
     task = asyncio.create_task(LangfusePrompts(Client()).resolve(PromptRef(name="test")))
     try:

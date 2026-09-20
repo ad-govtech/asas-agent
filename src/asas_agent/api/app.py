@@ -16,11 +16,12 @@ from pydantic import BaseModel, Field
 
 from asas_agent.bootstrap import Platform, build_platform
 from asas_agent.integrations.models import ModelError
-from asas_agent.integrations.prompts import PromptError
+from asas_agent.integrations.prompts import PromptError, PromptShapeError, PromptVariableError
 from asas_agent.registry.capabilities import CapabilityError
 from asas_agent.registry.outputs import OutputSchemaError
 from asas_agent.registry.repository import RegistryError
 from asas_agent.runtime.context import CapabilityPolicy, RuntimeContext
+from asas_agent.runtime.runner import RunInputError
 
 
 class ExecutionContext(BaseModel):
@@ -34,8 +35,12 @@ class ExecutionContext(BaseModel):
 class AgentRunRequest(BaseModel):
     agent_key: str
     environment: str = "production"
-    input: str
+    input: str = ""
     context: dict[str, Any] = Field(default_factory=dict, description="Facts the business service already loaded.")
+    prompt_variables: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Values for this request's `{{placeholders}}`, on top of the ones the definition sets.",
+    )
     execution: ExecutionContext
 
 
@@ -108,12 +113,18 @@ def create_app(platform: Platform | None = None) -> FastAPI:
                 environment=request.environment,
                 user_input=request.input,
                 business_context=request.context,
+                prompt_variables=request.prompt_variables,
                 context=context,
             )
         except RegistryError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (CapabilityError, OutputSchemaError) as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (PromptVariableError, RunInputError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except PromptShapeError as exc:
+            # The definition is broken, not the prompt service.
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         except (PromptError, ModelError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         except TimeoutError as exc:

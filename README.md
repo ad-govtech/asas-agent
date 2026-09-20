@@ -86,7 +86,52 @@ asas-agent agent promote customer-advisor 1 --env production            # rolled
 asas-agent agent list customer-advisor
 ```
 
-Publishing freezes the prompt: file prompts are rendered and stored in the agent definition; Langfuse labels such as `production` are resolved to an exact version. Editing a file does not change published agents. Create and publish a new agent version to adopt the edit. File snapshots travel with promotion and rollback, and runtime servers do not need the original files.
+Publishing freezes the prompt: file prompts are stored in the agent definition as they are written, placeholders included; Langfuse labels such as `production` are resolved to an exact version. Editing a file does not change published agents. Create and publish a new agent version to adopt the edit. File snapshots travel with promotion and rollback, and runtime servers do not need the original files.
+
+## Chat prompts and variables
+
+A prompt is either one block of text or a chat prompt: an ordered list of role-tagged messages.
+
+```json
+[
+  {"role": "system", "content": "You screen applications for {{entity}}."},
+  {"role": "user", "content": "Application: {{application}}"}
+]
+```
+
+System and developer messages become the agent's instructions. User and assistant messages open the run, so a prompt author decides where each fact lands instead of receiving one JSON blob.
+
+Placeholders are filled from two places:
+
+- `prompt.variables` in the agent definition, for values that are part of the published agent;
+- `prompt_variables` on the request, for values that belong to this call.
+
+A definition can also name exactly what a request may fill:
+
+```json
+{"prompt": {"name": "agents/screening", "variables": {"entity": "DGE"}, "request_variables": ["application"]}}
+```
+
+With `request_variables` set, any other name from a request is refused. Leave it out and a request may fill any name the definition does not set. A request may add values; it may not replace one the definition sets. Definition variables reach the system instructions, so a caller that could override one could rewrite a published agent's instructions. Publish a new version to change such a value.
+
+```python
+result = await platform.runtime.run(
+    agent_key="screening-assistant",
+    environment="production",
+    prompt_variables={"application": application.to_ai_view()},
+    context=RuntimeContext(tenant_id="T001", user_id="U812", correlation_id="REQ-09F4"),
+)
+```
+
+The same values can be sent to the runtime API as `prompt_variables`, or from the CLI with `--var name=value`.
+
+A placeholder with no value is an error: the model is never handed a literal `{{application}}` to read. Only the prompt's own placeholders count, so a CV or a job description that contains `{{...}}` is passed through as the data it is.
+
+Request variables reach the system instructions, so treat them as content the model will follow: pass your own data, not text a member of the public wrote, and use `request_variables` to keep the surface small. Their total size is capped by `ASAS_PROMPT_VARIABLES_MAX_BYTES` (256 KB by default), because instructions are re-sent on every turn.
+
+Values render as Langfuse renders them: `str(value)`, and nothing at all for `None`. A file prompt and a Langfuse prompt with the same text produce the same call.
+
+A sub-agent is filled from the same request variables as its parent, minus any its own definition already sets. Its prompt may not carry user or assistant messages, because a sub-agent is handed its caller's input and has nowhere to put them; that is refused at build time rather than dropped. `user_input` and `context` still work with a chat prompt and arrive as a JSON message after the prompt's own, but only when the caller sends them.
 
 ## Rules the package enforces
 
@@ -96,6 +141,11 @@ Publishing freezes the prompt: file prompts are rendered and stored in the agent
 - A model that cannot call tools or return structured output is refused at publish time, not mid-conversation.
 - Sub-agents that reference each other in a loop are refused.
 - A missing production prompt is an error. The runtime never falls back to a draft.
+- A prompt variable with no value is an error, not a placeholder left in the text.
+- A request cannot replace a variable the published definition sets.
+- A chat prompt with no system message, or with an empty one, is refused when it is published, not when it runs.
+- Instructions come first: a system message after a user or assistant message is refused, because instructions are hoisted out of the conversation.
+- A message whose content is not text is refused.
 
 ## Choose prompts and tracing
 
@@ -114,7 +164,7 @@ ASAS_PROMPT_DIR=prompts
 ASAS_TRACING_PROVIDER=none
 ```
 
-A prompt named `agents/customer-advisor` reads `prompts/agents/customer-advisor.md`. Variables such as `{{department}}` are substituted from the definition's `prompt.variables` before publication. File prompts do not support numeric versions or custom labels; the agent version identifies the stored snapshot (`prompt_version` is null).
+A prompt named `agents/customer-advisor` reads `prompts/agents/customer-advisor.md` as a text prompt, or `prompts/agents/customer-advisor.chat.json` as a chat prompt. File prompts do not support numeric versions or custom labels; the agent version identifies the stored snapshot (`prompt_version` is null).
 
 For Langfuse, install the optional dependency:
 
@@ -148,6 +198,7 @@ Tracing is independent: set `ASAS_TRACING_PROVIDER=langfuse` to send traces to t
 | `ASAS_PROMPT_PROVIDER` | `file` (default) or `langfuse` |
 | `ASAS_PROMPT_DIR` | Prompt folder for file drafts (default: `prompts`) |
 | `ASAS_TRACING_PROVIDER` | `none` (default) or `langfuse`, independent of prompts |
+| `ASAS_PROMPT_VARIABLES_MAX_BYTES` | Ceiling on a request's prompt variables (default: 256000) |
 | `ASAS_TRACING` | Set `false` to disable tracing regardless of provider |
 | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` | Prompts and traces |
 | `OPENAI_API_KEY` | OpenAI models |

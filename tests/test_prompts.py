@@ -70,8 +70,9 @@ async def test_published_file_prompt_survives_edits_and_removal(tmp_path):
     provider = FilePrompts(tmp_path)
     ref = PromptRef(name="advisor", variables={"name": "{{literal}}"})
     first = await pin_prompt(ref, provider)
-    assert first.snapshot == "Hello {{literal}}"
-    assert first.variables == {}
+    # The snapshot keeps its placeholders: a request's values are not known yet.
+    assert first.snapshot == "Hello {{name}}"
+    assert first.variables == {"name": "{{literal}}"}
     assert ref.snapshot is None
 
     path.write_text("Changed {{name}}", encoding="utf-8")
@@ -83,7 +84,8 @@ async def test_published_file_prompt_survives_edits_and_removal(tmp_path):
     assert (await provider.resolve(restored)).text == "Hello {{literal}}"
     assert (await provider.resolve(second)).text == "Changed {{literal}}"
     assert (await pin_prompt(restored, None)).snapshot == first.snapshot
-    assert (await LangfusePrompts().resolve(restored)).text == first.snapshot
+    # Rendering happens once, so a value that looks like a placeholder stays literal.
+    assert (await LangfusePrompts().resolve(restored)).text == "Hello {{literal}}"
 
 
 @pytest.mark.parametrize("name", ["../outside", "/tmp/outside"])
@@ -115,7 +117,7 @@ async def test_missing_prompt_or_provider_cannot_be_published(tmp_path):
         await pin_prompt(PromptRef(name="missing"), None)
 
 
-@pytest.mark.parametrize("selector", [{"version": 1}, {"label": "production"}, {"variables": {"x": "y"}}])
+@pytest.mark.parametrize("selector", [{"version": 1}, {"label": "production"}])
 def test_snapshot_cannot_have_ambiguous_selectors(selector):
     with pytest.raises(ValidationError, match="snapshot"):
         PromptRef(name="advisor", snapshot="text", **selector)
@@ -123,7 +125,9 @@ def test_snapshot_cannot_have_ambiguous_selectors(selector):
 
 async def test_langfuse_publication_pins_version_and_preserves_variables():
     client = MagicMock()
-    client.get_prompt.return_value = SimpleNamespace(version=7, compile=lambda **kw: f"Hello {kw['name']}")
+    client.get_prompt.return_value = SimpleNamespace(
+        version=7, prompt="Hello {{name}}", compile=lambda **kw: f"Hello {kw['name']}"
+    )
     provider = LangfusePrompts(client)
     pinned = await pin_prompt(PromptRef(name="advisor", variables={"name": "Ada"}), provider)
     client.get_prompt.assert_called_once_with("advisor", label="production")

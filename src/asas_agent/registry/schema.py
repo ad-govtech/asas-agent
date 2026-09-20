@@ -16,8 +16,23 @@ Status = Literal["draft", "published", "archived"]
 Environment = Literal["dev", "test", "staging", "production"]
 
 
+class PromptMessageRef(BaseModel):
+    """One message of a chat prompt, as published."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["system", "developer", "user", "assistant"]
+    content: str
+
+
 class PromptRef(BaseModel):
-    """Where the instructions live. A version pins it; a label follows a moving target."""
+    """Where the instructions live. A version pins it; a label follows a moving target.
+
+    A prompt with no versions of its own is published as a snapshot: `snapshot`
+    for a text prompt, `snapshot_messages` for a chat prompt. A snapshot keeps
+    its `{{placeholders}}`, because the values that fill them belong to a
+    request; the variables the definition sets are frozen with the definition.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -25,13 +40,20 @@ class PromptRef(BaseModel):
     version: int | None = None
     label: str | None = None
     variables: dict[str, Any] = Field(default_factory=dict)
+    #: The names a request may fill. `None` means any name the definition does not set.
+    request_variables: list[str] | None = None
     snapshot: str | None = None
+    snapshot_messages: list[PromptMessageRef] | None = None
 
     @model_validator(mode="after")
     def _one_selector(self) -> PromptRef:
-        if self.snapshot is not None:
-            if self.version is not None or self.label is not None or self.variables:
-                raise ValueError("A rendered prompt snapshot cannot have a version, label, or variables")
+        if self.snapshot is not None and self.snapshot_messages is not None:
+            raise ValueError("Set either a text snapshot or chat snapshot messages, not both")
+        if self.snapshot is not None or self.snapshot_messages is not None:
+            if self.version is not None or self.label is not None:
+                raise ValueError("A prompt snapshot cannot also have a version or a label")
+            if self.snapshot_messages is not None and not self.snapshot_messages:
+                raise ValueError("A chat prompt snapshot needs at least one message")
             return self
         if self.version is None and self.label is None:
             self.label = "production"
