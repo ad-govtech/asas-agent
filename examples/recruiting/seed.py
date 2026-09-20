@@ -27,15 +27,11 @@ async def seed(environment: str = "dev") -> None:
             agent_key = path.stem
             config = AgentConfig.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
-            definition = await platform.repository.create_draft(
-                agent_key=agent_key, config=config, created_by="recruiting-demo"
-            )
-            await platform.repository.publish(agent_key=agent_key, version=definition.version)
-            await platform.repository.bind(
+            definition = await platform.repository.release(
                 agent_key=agent_key,
+                config=config,
                 environment=environment,
-                version=definition.version,
-                updated_by="recruiting-demo",
+                created_by="recruiting-demo",
             )
             print(f"{agent_key:<22} v{definition.version} published and live in {environment}")
     finally:

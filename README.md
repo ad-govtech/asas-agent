@@ -39,6 +39,24 @@ asas-agent serve                        # POST /v1/agents/run on :8080
 | Output schemas | A Pydantic model per name, so an agent can return typed results |
 | Runtime API | `POST /v1/agents/run`, stateless, scale it horizontally |
 
+## Setting it up from your service
+
+An application creates the registry tables and publishes its agents as part of
+its own start-up, rather than asking an operator to run the CLI:
+
+```python
+from asas_agent import build_platform, migrate
+
+migrate()                      # before the event loop: it runs one of its own
+platform = build_platform()
+await platform.repository.release(
+    agent_key="customer-advisor",
+    config=AgentConfig.model_validate(definition_json),
+    environment="production",
+    created_by="deploy",       # adds a version, publishes it, makes it live
+)
+```
+
 ## Using it from your service
 
 ```python

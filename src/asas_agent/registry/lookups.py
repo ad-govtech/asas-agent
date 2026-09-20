@@ -95,6 +95,11 @@ class SharedAgentLookups:
         for key in [k for k in self._in_flight if k[0] == agent_key]:
             del self._in_flight[key]
 
+    async def release(self, **kwargs: Any) -> AgentDefinition:
+        definition = await self._repository.release(**kwargs)
+        self.detach(kwargs["agent_key"])
+        return definition
+
     async def publish(self, *, agent_key: str, version: int, **kwargs: Any) -> AgentDefinition:
         definition = await self._repository.publish(agent_key=agent_key, version=version, **kwargs)
         self.detach(agent_key)

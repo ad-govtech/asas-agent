@@ -94,3 +94,32 @@ async def test_publication_checks_tools_without_executing_them(repository):
     repository._validator.capabilities.capability("action", risk="action")(never_called)
     await release(repository, "action-agent", config(tools=["action"]))
     assert (await repository.get_active(agent_key="action-agent", environment="dev")).status == "published"
+
+
+async def test_release_publishes_and_makes_it_live_in_one_call(repository):
+    """The three steps every application was writing for itself."""
+    definition = await repository.release(agent_key="released", config=config(), environment="dev", created_by="test")
+
+    assert definition.status == "published"
+    assert (await repository.get_active(agent_key="released", environment="dev")).version == definition.version
+
+
+async def test_release_refuses_a_definition_that_could_not_run(repository):
+    with pytest.raises(CapabilityError):
+        await repository.release(
+            agent_key="released", config=config(tools=["unknown"]), environment="dev", created_by="test"
+        )
+
+    # Nothing left behind: no binding, and the draft is still a draft.
+    assert not await repository.bindings()
+    assert (await repository.get(agent_key="released", version=1)).status == "draft"
+
+
+async def test_release_again_adds_the_next_version_and_moves_the_environment(repository):
+    first = await repository.release(agent_key="released", config=config(), environment="dev", created_by="test")
+    second = await repository.release(
+        agent_key="released", config=config(description="second"), environment="dev", created_by="test"
+    )
+
+    assert (first.version, second.version) == (1, 2)
+    assert (await repository.get_active(agent_key="released", environment="dev")).version == 2

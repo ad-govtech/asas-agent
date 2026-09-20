@@ -117,17 +117,13 @@ def migrate(
     revision: str = typer.Option("head", help="Target revision."),
 ) -> None:
     """Create or update the registry tables."""
-    from alembic import command
-    from alembic.config import Config
+    from asas_agent.migrate import MigrationError
+    from asas_agent.migrate import migrate as run_migration
 
-    settings = get_settings()
-    if not settings.database_url:
-        raise typer.BadParameter("DATABASE_URL is not set. Run `asas-agent init` first.")
-
-    config = Config()
-    config.set_main_option("script_location", str(Path(__file__).resolve().parent.parent / "migrations"))
-    config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
-    command.upgrade(config, revision)
+    try:
+        run_migration(get_settings(), revision=revision)
+    except MigrationError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     typer.echo(f"Registry is at {revision}")
 
 
