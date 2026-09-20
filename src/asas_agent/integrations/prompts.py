@@ -210,28 +210,38 @@ def _split(
     )
 
 
-def merge_variables(ref: PromptRef, variables: dict[str, Any] | None) -> dict[str, Any]:
+def merge_variables(
+    ref: PromptRef, variables: dict[str, Any] | None, template: PromptTemplate | None = None
+) -> dict[str, Any]:
     """The definition's values, plus this request's.
 
-    A request may add values; it may not replace one the published definition
-    sets. Definition variables are part of an immutable version, and they reach
-    the system instructions, so letting a caller rewrite one would let any
-    caller rewrite a published agent's instructions.
+    What a request may fill is not configured anywhere: it is what the template
+    asks for and the definition has not already answered. Anything else would
+    not reach the model, so sending it is a mistake worth reporting.
+
+    A request may not replace a value the definition sets. Those are part of an
+    immutable version and they reach the system instructions, so a caller able
+    to rewrite one could rewrite a published agent's instructions.
     """
     request = variables or {}
+
     frozen = sorted(set(ref.variables) & set(request))
     if frozen:
         raise PromptVariableError(
             f"Prompt {ref.name!r} already sets {', '.join(frozen)} in the published definition. "
             "Publish a new version to change it; a request cannot."
         )
-    if ref.request_variables is not None:
-        refused = sorted(set(request) - set(ref.request_variables))
-        if refused:
+
+    if template is not None:
+        wanted = {name for message in template.messages for name in variable_names(message.content)}
+        unused = sorted(set(request) - wanted)
+        if unused:
+            accepted = sorted(wanted - set(ref.variables))
             raise PromptVariableError(
-                f"Prompt {ref.name!r} does not accept {', '.join(refused)} from a request. "
-                f"It accepts: {', '.join(ref.request_variables) or 'nothing'}."
+                f"Prompt {ref.name!r} does not use {', '.join(unused)}. "
+                f"It asks for: {', '.join(accepted) or 'nothing from a request'}."
             )
+
     return {**ref.variables, **request}
 
 
@@ -280,9 +290,7 @@ async def pin_prompt(ref: PromptRef, provider: PromptProvider | None) -> PromptR
     template = await provider.template(ref)
     # Substitution is not possible yet, but the shape is already decidable.
     _split(template, template.messages)
-    # Everything the definition decided about variables is carried over: an
-    # allowlist that went missing here would publish as "any name is allowed".
-    frozen = {"variables": ref.variables, "request_variables": ref.request_variables}
+    frozen = {"variables": ref.variables}
 
     if template.version is not None:
         return PromptRef(name=ref.name, version=template.version, **frozen)
@@ -328,7 +336,8 @@ class LangfusePrompts:
         # Rendering is ours, not the SDK's: `compile()` cannot take a variable
         # named `self`, and this way a file prompt and a Langfuse prompt with
         # the same text render identically.
-        return render(await self.template(ref), merge_variables(ref, variables))
+        template = await self.template(ref)
+        return render(template, merge_variables(ref, variables, template))
 
     def _fetch(self, ref: PromptRef):
         client = self._get_client()
@@ -431,7 +440,7 @@ class FilePrompts:
 
     async def resolve(self, ref: PromptRef, variables: dict[str, Any] | None = None) -> ResolvedPrompt:
         template = await self.template(ref)
-        return render(template, merge_variables(ref, variables))
+        return render(template, merge_variables(ref, variables, template))
 
     def _path(self, relative: str) -> Path:
         root = self.directory.resolve()

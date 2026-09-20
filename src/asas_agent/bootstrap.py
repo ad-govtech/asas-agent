@@ -18,8 +18,8 @@ from asas_agent.integrations.prompts import PromptError, PromptProvider, build_p
 from asas_agent.registry import capabilities as capability_module
 from asas_agent.registry import guardrails as guardrail_module
 from asas_agent.registry import outputs as output_module
-from asas_agent.registry.cache import CachedAgentRepository
 from asas_agent.registry.db import create_engine, create_session_factory
+from asas_agent.registry.lookups import SharedAgentLookups
 from asas_agent.registry.repository import AgentRepository
 from asas_agent.runtime.factory import AgentFactory
 from asas_agent.runtime.runner import AgentRuntime
@@ -105,12 +105,9 @@ def build_platform(
     tracer = _build_tracer(settings)
     engine = create_engine(settings.database_url)
     models = ModelRegistry(settings=settings)
-    repository: Any = AgentRepository(create_session_factory(engine), prompts=prompts, models=models)
-    # A fan-out asks for the same definition many times in one second.
-    repository = CachedAgentRepository(
-        repository,
-        ttl_seconds=settings.definition_cache_seconds,
-        max_entries=settings.definition_cache_size,
+    # A fan-out asks the same question many times in the same moment.
+    repository: Any = SharedAgentLookups(
+        AgentRepository(create_session_factory(engine), prompts=prompts, models=models)
     )
 
     factory = AgentFactory(
