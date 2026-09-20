@@ -59,3 +59,9 @@ The runtime holds no business state and no session. Anything durable lives in Po
 The original engineering guideline uses Langfuse as its reference deployment. This implementation also supports file prompts in shared environments: publication stores rendered text in the existing agent-definition JSONB, so no database migration or extra service is needed. The agent version identifies the snapshot. All publication paths use the repository's pinning logic; missing prompts prevent publication.
 
 Langfuse remains available through the `langfuse` extra (or `tracing` for span instrumentation). `LANGFUSE_HOST` selects a self-hosted/internal instance or Cloud, using that instance's project keys. `ASAS_TRACING_PROVIDER` chooses `none` or `langfuse` independently of `ASAS_PROMPT_PROVIDER`. See the README for deployment and migration settings.
+
+## Runtime and publication safeguards
+
+The runtime owns dependency merging, platform ceilings, and cancellation deadlines for every entry point. Tool sub-agents get individual turn/deadline limits; handoffs share the strictest chain limits because the SDK executes them in one run. Langfuse retrieval and flush calls run outside the event loop. Cancelled runs leave buffered spans to the SDK exporter instead of extending their deadline to flush.
+
+Publication checks references and capabilities without invoking tool factories. Promotion revalidates the current graph. PostgreSQL transaction-scoped advisory locks serialize version allocation per agent, including the first draft; a registry-wide binding lock serializes graph changes to prevent concurrent promotions creating cycles. Neither operation changes the database schema.

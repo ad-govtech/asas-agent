@@ -1,0 +1,39 @@
+name: Tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.12']
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: asas
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: asas_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U asas -d asas_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      ASAS_TEST_DATABASE_URL: postgresql+asyncpg://asas:test-only@localhost:5432/asas_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: uv sync --locked --extra dev
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+      - run: node --test tests/recruiting-security.test.mjs
+      - run: uv build

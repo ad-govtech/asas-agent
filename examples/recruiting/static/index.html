@@ -186,6 +186,12 @@
 const $ = (id) => document.getElementById(id);
 let options = null;
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[char]);
+}
+
 async function api(path, method = "GET", body) {
   const response = await fetch(path, {
     method,
@@ -207,8 +213,8 @@ function renderTools() {
       const inDefinition = current.tools.includes(key);
       const action = key.split(".")[1] && !["search", "history", "lookup"].includes(key.split(".")[1]);
       return `<label class="check">
-        <input type="checkbox" value="${key}" ${inDefinition ? "checked" : ""} ${inDefinition ? "" : "disabled"}>
-        <code>${key}</code>
+        <input type="checkbox" value="${escapeHtml(key)}" ${inDefinition ? "checked" : ""} ${inDefinition ? "" : "disabled"}>
+        <code>${escapeHtml(key)}</code>
         ${action ? '<span class="risk">changes data</span>' : ""}
         ${inDefinition ? "" : '<span class="risk" style="color:var(--slate);background:var(--mist);border-color:var(--line)">not in this agent</span>'}
       </label>`;
@@ -231,23 +237,23 @@ function selectedTools() {
 
 function fieldList(title, items) {
   if (!items || !items.length) return "";
-  return `<div class="field"><h3>${title}</h3><ul>${items.map((i) => `<li>${i}</li>`).join("")}</ul></div>`;
+  return `<div class="field"><h3>${escapeHtml(title)}</h3><ul>${items.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}</ul></div>`;
 }
 
 function renderAnswer(output) {
   if (!output || typeof output !== "object") {
-    $("answer").innerHTML = `<div class="field">${output ?? ""}</div>`;
+    $("answer").innerHTML = `<div class="field">${escapeHtml(output)}</div>`;
     return;
   }
   let html = "";
   if (output.recommendation) {
-    html += `<div class="field"><h3>Recommendation</h3><span class="tag ${output.recommendation}">${output.recommendation}</span></div>`;
+    html += `<div class="field"><h3>Recommendation</h3><span class="tag ${escapeHtml(output.recommendation)}">${escapeHtml(output.recommendation)}</span></div>`;
   }
   for (const [key, value] of Object.entries(output)) {
     if (key === "recommendation") continue;
     const title = key.replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase());
     if (Array.isArray(value)) html += fieldList(title, value);
-    else if (value) html += `<div class="field"><h3>${title}</h3><div>${value}</div></div>`;
+    else if (value) html += `<div class="field"><h3>${escapeHtml(title)}</h3><div>${escapeHtml(value)}</div></div>`;
   }
   $("answer").innerHTML = html;
 }
@@ -262,26 +268,26 @@ function renderRan(ran) {
     ["Latency", `${ran.latency_ms} ms`],
   ];
   if (ran.trace_id) cells.push(["Trace", ran.trace_id]);
-  $("ran").innerHTML = cells.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("");
+  $("ran").innerHTML = cells.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join("");
 }
 
 async function loadVersions() {
-  const { versions } = await api(`/api/versions/${$("agent").value}`);
+  const { versions } = await api(`/api/versions/${encodeURIComponent($("agent").value)}`);
   $("versions").innerHTML = versions
     .map(
       (v) => `<tr>
-        <td>v${v.version}</td>
-        <td>${v.model}</td>
-        <td>${v.tools.join(", ") || "none"}</td>
-        <td>${v.live ? '<span class="live">live in dev</span>' : v.status}</td>
-        <td>${v.live ? "" : `<button class="ghost" data-version="${v.version}">Make live</button>`}</td>
+        <td>v${escapeHtml(v.version)}</td>
+        <td>${escapeHtml(v.model)}</td>
+        <td>${escapeHtml(v.tools.join(", ") || "none")}</td>
+        <td>${v.live ? '<span class="live">live in dev</span>' : escapeHtml(v.status)}</td>
+        <td>${v.live ? "" : `<button class="ghost" data-version="${escapeHtml(v.version)}">Make live</button>`}</td>
       </tr>`
     )
     .join("");
 
   $("versions").querySelectorAll("button").forEach((button) =>
     button.addEventListener("click", async () => {
-      await api(`/api/rollback/${$("agent").value}/${button.dataset.version}`, "POST");
+      await api(`/api/rollback/${encodeURIComponent($("agent").value)}/${encodeURIComponent(button.dataset.version)}`, "POST");
       options = await api("/api/options");
       renderAgentMeta();
     })
@@ -308,7 +314,7 @@ async function run() {
     renderAnswer(result.output);
     $("facts").textContent = JSON.stringify(result.context, null, 2);
   } catch (error) {
-    $("banner").innerHTML = `<div class="banner error">${error.message}</div>`;
+    $("banner").innerHTML = `<div class="banner error">${escapeHtml(error.message)}</div>`;
   } finally {
     $("run").disabled = false;
   }
@@ -329,9 +335,9 @@ async function saveVariant() {
     });
     options = await api("/api/options");
     renderAgentMeta();
-    $("banner").innerHTML = `<div class="banner sample">Saved v${created.version} and made it live. Run again to use it.</div>`;
+    $("banner").innerHTML = `<div class="banner sample">Saved v${escapeHtml(created.version)} and made it live. Run again to use it.</div>`;
   } catch (error) {
-    $("banner").innerHTML = `<div class="banner error">${error.message}</div>`;
+    $("banner").innerHTML = `<div class="banner error">${escapeHtml(error.message)}</div>`;
   } finally {
     $("variant").disabled = false;
   }
@@ -345,9 +351,9 @@ async function start() {
     : "no model key, sample answers";
   if (!options.model_key_set) $("status-dot").classList.add("off");
 
-  $("agent").innerHTML = options.agents.map((a) => `<option value="${a.agent_key}">${a.name}</option>`).join("");
-  $("scenario").innerHTML = options.scenarios.map((s) => `<option value="${s.id}">${s.label}</option>`).join("");
-  $("model").innerHTML = options.models.map((m) => `<option value="${m}">${m}</option>`).join("");
+  $("agent").innerHTML = options.agents.map((a) => `<option value="${escapeHtml(a.agent_key)}">${escapeHtml(a.name)}</option>`).join("");
+  $("scenario").innerHTML = options.scenarios.map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.label)}</option>`).join("");
+  $("model").innerHTML = options.models.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
   $("request").value = options.scenarios[0].request;
 
   $("agent").addEventListener("change", renderAgentMeta);

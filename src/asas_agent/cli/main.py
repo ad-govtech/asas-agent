@@ -128,7 +128,7 @@ def migrate(
 
     config = Config()
     config.set_main_option("script_location", str(Path(__file__).resolve().parent.parent / "migrations"))
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+    config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
     command.upgrade(config, revision)
     typer.echo(f"Registry is at {revision}")
 
