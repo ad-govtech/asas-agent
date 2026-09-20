@@ -182,7 +182,9 @@ class AgentRepository:
 
         return AgentDefinition.from_row(updated)
 
-    async def _validate_config(self, session, agent_key: str, config: AgentConfig) -> None:
+    async def _validate_config(
+        self, session, agent_key: str, config: AgentConfig, environment: Environment | None = None
+    ) -> None:
         async def resolve_child(key: str, environment: str) -> AgentConfig:
             child = (
                 await session.execute(
@@ -203,7 +205,7 @@ class AgentRepository:
                 raise RegistryError(f"No published agent is bound to {key} in {environment}")
             return AgentConfig.model_validate(child.config)
 
-        await self._validator.validate(config, agent_key=agent_key, resolve=resolve_child)
+        await self._validator.validate(config, agent_key=agent_key, environment=environment, resolve=resolve_child)
 
     async def bind(self, *, agent_key: str, environment: Environment, version: int, updated_by: str) -> None:
         """Point an environment at a published version. This is promotion and rollback."""
@@ -225,7 +227,9 @@ class AgentRepository:
             if row.status != "published":
                 raise RegistryError(f"{agent_key} v{version} is {row.status}. Publish it before binding an environment")
 
-            await self._validate_config(session, agent_key, AgentConfig.model_validate(row.config))
+            # Validate the graph as the binding about to exist, so a loop
+            # through this environment is caught before it can be created.
+            await self._validate_config(session, agent_key, AgentConfig.model_validate(row.config), environment)
 
             statement = pg_insert(agent_environment_bindings).values(
                 agent_key=agent_key,

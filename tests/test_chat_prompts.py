@@ -576,3 +576,92 @@ async def test_a_trace_records_which_variables_were_filled_but_not_their_values(
     assert context.trace_metadata["prompt_variables"] == ["area", "candidate_profile"]
     assert len(context.trace_metadata["instructions_digest"]) == 12
     assert "Ada Lovelace" not in json.dumps(context.trace_metadata)
+
+
+async def test_publishing_keeps_the_names_a_request_may_fill(tmp_path):
+    """An allowlist lost at publication would publish as "any name is allowed"."""
+    provider = file_prompts(tmp_path)
+    ref = PromptRef(name="scorer", variables={"area": "Delivery"}, request_variables=["candidate_profile"])
+
+    pinned = await pin_prompt(ref, provider)
+    assert pinned.request_variables == ["candidate_profile"]
+
+    restored = PromptRef.model_validate_json(pinned.model_dump_json())
+    assert (await provider.resolve(restored, {"candidate_profile": "Ada"})).messages[0].content == "Profile: Ada"
+    with pytest.raises(PromptVariableError, match="does not accept tone"):
+        await provider.resolve(restored, {"candidate_profile": "Ada", "tone": "casual"})
+
+
+async def test_publishing_keeps_an_allowlist_that_accepts_nothing(tmp_path):
+    """`[]` means "a request fills nothing"; `None` means "anything the definition leaves open"."""
+    provider = file_prompts(tmp_path, [{"role": "system", "content": "You score {{area}}."}])
+    ref = PromptRef(name="scorer", variables={"area": "Delivery"}, request_variables=[])
+
+    pinned = await pin_prompt(ref, provider)
+    assert pinned.request_variables == []
+
+    with pytest.raises(PromptVariableError, match="accepts: nothing"):
+        await provider.resolve(pinned, {"candidate_profile": "Ada"})
+
+
+async def test_publishing_a_langfuse_prompt_keeps_its_allowlist_too():
+    provider = LangfusePrompts(chat_client())
+    pinned = await pin_prompt(PromptRef(name="scorer", request_variables=["candidate_profile"]), provider)
+    assert (pinned.version, pinned.request_variables) == (7, ["candidate_profile"])
+
+
+async def test_a_value_a_sub_agent_does_not_accept_is_dropped_not_refused(tmp_path):
+    """The caller addressed the parent; a specialist's narrower allowlist is its own business."""
+    (tmp_path / "specialist.chat.json").write_text(
+        json.dumps([{"role": "system", "content": "Advise on {{candidate_profile}}."}])
+    )
+    configs = {
+        "scorer": AgentConfig(
+            name="Scorer",
+            prompt=PromptRef(name="scorer", request_variables=["area", "candidate_profile", "locale"]),
+            model={"provider": "openai", "name": "gpt-5-nano"},
+            sub_agents=[{"agent_key": "specialist", "environment": "dev", "mode": "tool"}],
+        ),
+        "specialist": AgentConfig(
+            name="Specialist",
+            prompt=PromptRef(name="specialist", request_variables=["candidate_profile"]),
+            model={"provider": "openai", "name": "gpt-5-nano"},
+        ),
+    }
+    runtime = _runtime(file_prompts(tmp_path), configs["scorer"])
+    runtime.factory.repository = _configured_repository(configs)
+
+    built = await runtime.factory.build(
+        agent_key="scorer",
+        environment="dev",
+        context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
+        prompt_variables={"area": "Delivery", "candidate_profile": "Ada", "locale": "en"},
+    )
+    assert built.agent.instructions == "You score Delivery."
+
+
+async def test_a_sub_agent_that_accepts_nothing_from_a_request_still_builds(tmp_path):
+    (tmp_path / "specialist.chat.json").write_text(json.dumps([{"role": "system", "content": "Advise plainly."}]))
+    configs = {
+        "scorer": AgentConfig(
+            name="Scorer",
+            prompt=PromptRef(name="scorer"),
+            model={"provider": "openai", "name": "gpt-5-nano"},
+            sub_agents=[{"agent_key": "specialist", "environment": "dev", "mode": "tool"}],
+        ),
+        "specialist": AgentConfig(
+            name="Specialist",
+            prompt=PromptRef(name="specialist", request_variables=[]),
+            model={"provider": "openai", "name": "gpt-5-nano"},
+        ),
+    }
+    runtime = _runtime(file_prompts(tmp_path), configs["scorer"])
+    runtime.factory.repository = _configured_repository(configs)
+
+    built = await runtime.factory.build(
+        agent_key="scorer",
+        environment="dev",
+        context=RuntimeContext(tenant_id="T1", user_id="U1", correlation_id="R1"),
+        prompt_variables={"area": "Delivery", "candidate_profile": "Ada"},
+    )
+    assert built.agent.instructions == "You score Delivery."
