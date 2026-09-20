@@ -64,6 +64,12 @@ The original engineering guideline uses Langfuse as its reference deployment. Th
 
 Langfuse remains available through the `langfuse` extra (or `tracing` for span instrumentation). `LANGFUSE_HOST` selects a self-hosted/internal instance or Cloud, using that instance's project keys. `ASAS_TRACING_PROVIDER` chooses `none` or `langfuse` independently of `ASAS_PROMPT_PROVIDER`. See the README for deployment and migration settings.
 
+## Upgrading a registry written by a pre-release build
+
+A prompt snapshot stores the template as written, placeholders included, and the definition's variables beside it. A pre-release build stored *rendered* text instead and dropped the variables, and the two are indistinguishable in the row.
+
+This package has not been released, so no such rows are expected to exist. If a registry was populated by an earlier build, republish those agents before upgrading: a stored `Explain {{customer}}` that was already rendered would otherwise be read as a template and either demand a value for `customer` or substitute request data into text that used to be literal. A published version is immutable, so the fix is a new version, not an edit.
+
 ## Runtime and publication safeguards
 
 The runtime owns dependency merging, platform ceilings, and cancellation deadlines for every entry point. Tool sub-agents get individual turn/deadline limits; handoffs share the strictest chain limits because the SDK executes them in one run. Langfuse retrieval and flush calls run outside the event loop. Cancelled runs leave buffered spans to the SDK exporter instead of extending their deadline to flush.

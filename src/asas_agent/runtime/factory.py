@@ -90,11 +90,17 @@ class AgentFactory:
         config = definition.config
 
         async with asyncio.timeout_at(started + min(context.timeout_seconds, config.runtime.timeout_seconds)):
-            # A sub-agent keeps whatever its own definition sets: the caller
-            # addressed the parent and cannot know a specialist's variables.
             values = prompt_variables
             if is_sub_agent and values:
-                values = {k: v for k, v in values.items() if k not in config.prompt.variables}
+                # The caller addressed the parent and cannot know what a
+                # specialist reserves or accepts, so a value it has no use for
+                # is dropped rather than refused.
+                allowed = config.prompt.request_variables
+                values = {
+                    key: value
+                    for key, value in values.items()
+                    if key not in config.prompt.variables and (allowed is None or key in allowed)
+                }
             resolved_prompt = await self.prompts.resolve(config.prompt, values)
             if is_sub_agent and resolved_prompt.messages:
                 # A sub-agent is handed the caller's or the parent's input, so
