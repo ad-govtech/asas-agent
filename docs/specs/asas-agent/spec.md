@@ -191,8 +191,11 @@ It owns **what an agent is, which version of it is live, and what happens when o
 
 **R-TR-1** Tracing MUST be off by default, and no path in the default configuration may require credentials for an observability service.
 
-**R-TR-2** When an internal trace backend is selected, the system MUST remove the agent SDK vendor's own trace exporter, whether the instrumentation attached, failed, or was already present.
-**Why:** the SDK installs that exporter by default, so selecting a backend is otherwise an addition rather than a choice. A processor the embedding application installed is that application's to remove: the runtime MUST leave it alone, because a library that uninstalls its host's instrumentation is worse than the problem.
+**R-TR-2** When an internal trace backend is selected, the system MUST leave no processor exporting to the agent SDK vendor's backend, whether the instrumentation attached, failed, was already present, or is not installed.
+**Why:** the SDK installs that exporter by default, so selecting a backend is otherwise an addition rather than a choice.
+
+**R-TR-7** Selecting an internal trace backend MAY replace trace processors the embedding application installed before the runtime was built, and an application that installs its own MUST do so afterwards.
+**Why:** the instrumentation library attaches exclusively — it replaces the SDK's processor list rather than adding to it — so this is not the runtime's choice to make on its host's behalf. Stated as an ordering constraint an application can act on, rather than left to be discovered. Changing it is `spec.md` P-4.
 
 **R-TR-3** A run MUST be named — by the caller, or after its agent — and the name MUST be plain text, bounded in length, and MUST NOT claim the form the runtime uses for an unnamed run.
 **Why:** an evaluation harness reads the name to decide which agent a generation belongs to.
@@ -260,4 +263,5 @@ below is a gap; promoting one means giving it the next free id in its prefix.
 |---|---|---|
 | **P-1 Fail closed when no API key is set** | R-API-2 is conditional: with no key configured, the HTTP interface serves everyone. This would refuse to start outside `dev` unless a key is set | It is one line in a deployment's own configuration, and a runtime that refuses to start is a new way to have an outage. Raised in review and not done |
 | **P-2 Name the fields the runtime owns and refuse a collision** | R-TR-4 keeps the runtime's answer by writing last. This would refuse a request that supplies one of those names, rather than quietly replacing it | The caller here is the embedding application, which is trusted code, and the HTTP interface does not expose the field at all. It would turn an extension point into an allowlist to maintain |
-| **P-3 Map the provider client's own exceptions** | R-API-3 asks for an unreachable provider to have its own status; only the package's `ModelError` is mapped, so the SDK client's `APIConnectionError` becomes 500 | Real, and the smallest of the three to fix — see `verification.md` F-8 |
+| **P-3 Map the provider client's own exceptions** | R-API-3 asks for an unreachable provider to have its own status; only the package's `ModelError` is mapped, so the SDK client's `APIConnectionError` becomes 500 | Real, and the smallest of these to fix — see `verification.md` F-8 |
+| **P-4 Instrument non-exclusively** | `instrument(exclusive_processor=False)` adds a processor instead of replacing the list; the sweep that follows would then remove the SDK's exporter and leave an application's processors standing, satisfying R-TR-2 without R-TR-7's ordering constraint | Untested here, and it makes the runtime's tracing depend on what else is installed. It is the obvious answer to R-TR-7 and should be measured before it is believed |

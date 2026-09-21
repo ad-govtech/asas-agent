@@ -99,7 +99,18 @@ How the contract in `spec.md` is built. Every section cites the requirements it 
 
 **D-25** (R-TR-2) After instrumenting, the runtime walks the SDK's processor list and removes each one whose `_exporter` is an instance of the SDK's `BackendSpanExporter` — its vendor backend, and nothing else. It does this whether the instrumentation attached, failed, or was already present. Trusting `instrument()` was tried and failed: it reports a version mismatch by logging and returning, so its silence meant nothing.
 
-**D-25a** (R-TR-2) Every other processor is left in place, including one the embedding application installed, which may export wherever that application chose. `test_another_librarys_processor_is_left_alone` holds this deliberately: the runtime removes the exporter it knows the SDK added, and does not audit its host's instrumentation.
+**D-25a** (R-TR-2, R-TR-7) The sweep is only half the story, and the order matters. `_build_tracer` instruments first, and the instrumentation library attaches **exclusively**: its pinned implementation calls `set_trace_processors([OpenInferenceTracingProcessor(...)])`, which replaces the list rather than adding to it. So on a first successful attachment, everything already installed goes — the SDK's own exporter and anything the embedding application registered beforehand — and the sweep that follows finds nothing to remove.
+
+**D-25b** (R-TR-2) When the instrumentation does **not** replace the list — a version mismatch, a raise, the package absent, or a process already instrumented without exclusivity — the sweep is what satisfies R-TR-2: it removes only processors exporting to the SDK vendor's backend and leaves every other one standing. `test_another_librarys_processor_is_left_alone` establishes that path, with instrumentation stubbed to a no-op; it does not establish the exclusive one.
+
+**D-25c** Measured through the real `_build_tracer` with the pinned instrumentor and only the Langfuse client stubbed, no traces exported:
+
+```
+before: ['BatchTraceProcessor', 'ApplicationProcessor']
+after:  ['OpenInferenceTracingProcessor']
+```
+
+An earlier revision of these documents claimed the runtime leaves an application's processors alone, full stop. That is true of the sweep and false of the path through it — see `verification.md` F-10.
 
 **D-26** (R-TR-4, R-TR-6) The runner copies the context's trace metadata, and the factory's `update()` lands **after** it, so the runtime's fields carry the runtime's answer whatever was supplied under those names. Anything else the embedding application put there travels beside them into the observation.
 

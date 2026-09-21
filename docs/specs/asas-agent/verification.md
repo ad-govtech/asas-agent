@@ -93,7 +93,8 @@ Evidence names a test file, a command, or a line of code. `pytest -q` on this re
 | Requirement | Implementation | Verification | Evidence |
 |---|---|---|---|
 | R-TR-1 off by default | Met | Covered | `test_default_platform_runs_without_langfuse`; `tracing_provider` defaults to `none` |
-| R-TR-2 the SDK vendor's exporter is removed | Met | **Enforced** | `test_tracing_safety.py` — instrumentation that returns, raises, is missing, is already present, and one that does attach. `test_another_librarys_processor_is_left_alone` holds the other half: a processor the application installed survives, by design |
+| R-TR-2 nothing left exporting to the SDK vendor | Met | **Enforced** | `test_tracing_safety.py` — instrumentation that returns, raises, is missing, is already present, and one that does attach |
+| R-TR-7 instrumenting may replace an application's processors | Met | **Observed** | Measured through the real `_build_tracer` with the pinned instrumentor, Langfuse stubbed, nothing exported: `['BatchTraceProcessor', 'ApplicationProcessor']` → `['OpenInferenceTracingProcessor']`. `test_another_librarys_processor_is_left_alone` covers the **other** path — instrumentation stubbed to a no-op, where the sweep preserves what it finds. See F-10 |
 | R-TR-3 a run is named, and the name is plain | Met | Covered | `test_a_run_name_that_cannot_be_trusted_is_refused` (blank, `agent:` prefix, over-long, control and zero-width characters) |
 | R-TR-4 the runtime's fields carry the runtime's answer | Met | **Observed** | The factory's `update()` lands after the caller's dict. Measured: a context supplying `agent_key="LIE"` was recorded as `scorer` |
 | R-TR-6 an application's own fields travel beside it | Met | **Observed** | Same run: `smuggled="yes"` reached the metadata unchanged. `AgentRunRequest` has no such field, so this is the embedding API only |
@@ -147,6 +148,8 @@ quietly rewritten: what the audit got wrong is part of what the audit found.
 
 **F-9 — the evidence checker validated a comment.** `test_a_run_with_nothing_to_say_is_refused` was cited as evidence and existed only as `# def …` inside another test: the assertion ran, under a name pytest never collected, and `grep "def $t"` matched the comment. The test is split out properly in this revision, and the checker now reads names from the AST. The lesson is the one this document keeps relearning — a check that can pass for the wrong reason is not a check.
 
+**F-10 — the exclusive-instrumentation path was documented backwards.** An earlier revision said the runtime leaves an embedding application's trace processors alone. That is true of `_stop_exporting_to_openai`, which was the code read, and false of the path that reaches it: `instrument(exclusive_processor=True)` calls `set_trace_processors([...])` in its pinned implementation, so a first successful attachment replaces the list and an application's processor registered beforehand is gone. Reproduced through the real `_build_tracer`. The existing preservation test stubs instrumentation to a no-op, so it established the fallback path and was read as establishing both. Now **R-TR-7**, stated as an ordering constraint an application can act on — install your processors after `build_platform` — with `spec.md` P-4 as the alternative worth measuring.
+
 ---
 
 ## Mechanical checks
@@ -159,20 +162,23 @@ python docs/specs/asas-agent/check_spec.py
 ```
 
 ```
-50 requirements, one status row each, contiguous: R-API-1..4, R-CAP-1..5, R-OPS-1..2,
-  R-PR-1..9, R-PUB-1..5, R-REG-1..8, R-RUN-1..11, R-TR-1..6
-48 test names cited, all collected
+51 requirements, one status row each, contiguous: R-API-1..4, R-CAP-1..5, R-OPS-1..2,
+  R-PR-1..9, R-PUB-1..5, R-REG-1..8, R-RUN-1..11, R-TR-1..7
+48 test names cited, all defined
 ```
 
 It **asserts**, which the shell one-liners it replaces did not:
 
-- every id declared in `spec.md` has **exactly one** status row, and the reverse — counted, not compared as a set, so a duplicated row is caught. Ids cited in the invariants table or inside a finding are references, not rows, and are excluded by matching only a row that opens with its id
+- every id is **declared exactly once** in `spec.md` and has **exactly one** status row in `verification.md` — counted on both sides, not compared as sets. A declaration is a bold id opening a line; a status row is an id opening a table cell. An id anywhere else — the invariants table, a rationale, a finding — is a reference, and is checked only for having a declaration to refer to
 - every prefix runs contiguously from 1, with no gaps and no repeats
-- every `test_…` named as evidence is a function **pytest would collect**, read from the AST, or a test file that exists
+- every `test_…` named as evidence is a **test definition at module or class level**, read from the AST, or a test file that exists. Not `ast.walk`, which would also accept a function nested inside another test — pytest does not collect those
 
 The first version of these checks did none of the three reliably: `sort -u` compares
 membership and hides a duplicate, the contiguity command printed ids without checking
 them, and the evidence check grepped for `def`, which matched a commented-out one (F-9).
+The first Python version still counted every id rather than declarations, so a
+duplicated requirement passed — caught in review, and the reason check 1 now matches
+the bold heading and the table cell rather than the whole file.
 
 Each check was then proven by mutation, because a checker nobody has seen fail is a
 checker nobody has tested:
@@ -182,8 +188,12 @@ checker nobody has tested:
 | The split-out test put back as a `# def` comment | `test_a_run_with_nothing_to_say_is_refused is named as evidence and is not a collected test` |
 | A status row duplicated | `R-CAP-3 has 2 status rows in verification.md, expected exactly one` |
 | `R-TR-5` renumbered to `R-TR-9` in both files | `R-TR-* is [1, 2, 3, 4, 6, 9], expected [1, 2, 3, 4, 5, 6]` |
+| An `**R-CAP-3**` declaration duplicated | `R-CAP-3 is declared 2 times in spec.md, expected exactly once` |
+| A cited test nested inside another function | `…is named as evidence and is not a test definition` |
 
 Earlier revisions of this document failed these checks four times: three tests named as
 evidence did not exist, and a fourth was a comment. Every correction changed a status
-row, and two of them (F-7, F-8) changed what the requirement itself should say. That is
-the argument for running them rather than reading them.
+row, and three of them (F-7, F-8, F-10) changed what the requirement itself should say.
+That is the argument for running them rather than reading them — and F-10 is the
+argument for not stopping there, because no mechanical check would have caught a
+sentence that was true of the function read and false of the path that calls it.
