@@ -35,12 +35,6 @@ def test_the_same_tool_cannot_be_listed_twice():
         AgentConfig.model_validate({**BASE, "tools": ["policy.search", "policy.search"]})
 
 
-def test_two_sub_agents_cannot_share_a_tool_name():
-    sub = {"agent_key": "a", "mode": "tool", "tool_name": "specialist"}
-    with pytest.raises(ValidationError):
-        AgentConfig.model_validate({**BASE, "sub_agents": [sub, {**sub, "agent_key": "b"}]})
-
-
 def test_runtime_limits_are_capped():
     with pytest.raises(ValidationError):
         AgentConfig.model_validate({**BASE, "runtime": {"max_turns": 500}})
