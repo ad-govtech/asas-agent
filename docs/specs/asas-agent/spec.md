@@ -146,7 +146,11 @@ It owns **what an agent is, which version of it is live, and what happens when o
 
 ### 2.5 A run
 
-**R-RUN-1** A run MUST use the version bound to its environment when the run starts.
+**R-RUN-1** A run MUST use the version its registry lookup read, and a lookup MUST NOT reuse an answer once it has returned.
+**Why:** the alternative is a cache, and a cache is a standing question about how stale a binding may be.
+
+**R-RUN-11** A run that joins a lookup already in flight MAY be given the version that was live when that lookup started, so a promotion made in another process MAY be missed by at most the runs that arrive during one query; the run after it MUST be current.
+**Why:** closing this window means distributed invalidation, which costs more than the window it protects. It is bounded by one query and stated so that nobody plans around a guarantee that is not there.
 
 **R-RUN-2** A run MUST be bounded by the smallest of the caller's deadline, the definition's, and the platform ceiling, and that deadline MUST cover assembling the agent as well as executing it.
 
@@ -160,7 +164,8 @@ It owns **what an agent is, which version of it is live, and what happens when o
 **R-RUN-6** Each run MUST receive its own copy of the definition.
 **Why:** runs share a lookup, and a configuration object is mutable.
 
-**R-RUN-7** Runs asking for the same agent and environment at the same moment MUST share one registry query.
+**R-RUN-7** Runs in one process whose lookups for the same agent and environment overlap in time MUST share one registry query.
+**Why:** a fan-out asks the same question dozens of times in a second. Runs in other processes, and runs whose lookups do not overlap, each ask their own.
 
 **R-RUN-8** A run that is cancelled MUST NOT cancel a query other runs are waiting on, and MUST NOT prevent the next run from using its answer.
 
@@ -186,14 +191,17 @@ It owns **what an agent is, which version of it is live, and what happens when o
 
 **R-TR-1** Tracing MUST be off by default, and no path in the default configuration may require credentials for an observability service.
 
-**R-TR-2** When an internal trace backend is selected, the system MUST NOT leave an exporter installed that sends traces anywhere else.
-**Why:** choosing somewhere to send traces is also choosing where not to.
+**R-TR-2** When an internal trace backend is selected, the system MUST remove the agent SDK vendor's own trace exporter, whether the instrumentation attached, failed, or was already present.
+**Why:** the SDK installs that exporter by default, so selecting a backend is otherwise an addition rather than a choice. A processor the embedding application installed is that application's to remove: the runtime MUST leave it alone, because a library that uninstalls its host's instrumentation is worse than the problem.
 
 **R-TR-3** A run MUST be named — by the caller, or after its agent — and the name MUST be plain text, bounded in length, and MUST NOT claim the form the runtime uses for an unnamed run.
 **Why:** an evaluation harness reads the name to decide which agent a generation belongs to.
 
-**R-TR-4** The system MUST record what ran — agent key and version, prompt name and version, which inputs were filled, model, toolset, tenant — and a request MUST NOT be able to add to or overwrite it.
-**Why:** a trace is evidence of what ran.
+**R-TR-4** The system MUST record what ran — agent key and version, prompt name and version, which inputs were filled, model, toolset, tenant — and MUST record what it resolved, whatever the caller supplied under those names.
+**Why:** a trace is evidence of what ran, so the runtime's own fields are the runtime's answer and not a caller's suggestion.
+
+**R-TR-6** The system MUST carry an embedding application's own trace fields through beside its record.
+**Why:** the application knows things the runtime does not — a job id, a batch, an experiment arm — and this is the place to put them. The embedding application is trusted code; the HTTP interface does not expose this field, so it is not a path from a request.
 
 **R-TR-5** The system MUST NOT put a caller's name or fields into the SDK's own trace.
 **Why:** that trace may be exported somewhere the deployment did not choose.
@@ -239,3 +247,17 @@ Recorded because each was considered and removed or never built, and because an 
 | **An evaluation gate between draft and published** | The guideline asks for it; publication has the hook and no runner |
 | **Dynamic MCP discovery** | An MCP server can be a capability; discovering one from configuration is not supported |
 | **A visual agent builder** | The CLI and the definition JSON are the interface |
+
+---
+
+## 4. Proposals
+
+Not requirements. Each is a change someone might want, written here so that reading
+§2 tells you what the module does and not what an author thought it should do. Nothing
+below is a gap; promoting one means giving it the next free id in its prefix.
+
+| Proposal | What it would change | Argument against |
+|---|---|---|
+| **P-1 Fail closed when no API key is set** | R-API-2 is conditional: with no key configured, the HTTP interface serves everyone. This would refuse to start outside `dev` unless a key is set | It is one line in a deployment's own configuration, and a runtime that refuses to start is a new way to have an outage. Raised in review and not done |
+| **P-2 Name the fields the runtime owns and refuse a collision** | R-TR-4 keeps the runtime's answer by writing last. This would refuse a request that supplies one of those names, rather than quietly replacing it | The caller here is the embedding application, which is trusted code, and the HTTP interface does not expose the field at all. It would turn an extension point into an allowlist to maintain |
+| **P-3 Map the provider client's own exceptions** | R-API-3 asks for an unreachable provider to have its own status; only the package's `ModelError` is mapped, so the SDK client's `APIConnectionError` becomes 500 | Real, and the smallest of the three to fix — see `verification.md` F-8 |

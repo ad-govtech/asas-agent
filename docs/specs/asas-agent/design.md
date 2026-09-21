@@ -81,6 +81,8 @@ How the contract in `spec.md` is built. Every section cites the requirements it 
 
 **D-19** (R-RUN-9) A write made through the wrapper detaches the in-flight query for that agent, so a run arriving after it starts a fresh one. Runs already waiting keep the answer they asked for.
 
+**D-19a** (R-RUN-11) A write made anywhere else — another process, the CLI, a hand-run SQL statement — cannot detach anything here, so a run joining a query that opened before that write is given the version the query read. The window is one query wide and the next run is current. Closing it needs a channel between processes; the boundary is documented instead, in this module's own docstring and in `spec.md`.
+
 **D-20** (R-RUN-6) Every answer is handed out as a copy with a deep-copied configuration.
 
 **D-21** Nothing is stored after a query completes. A TTL cache was built and removed: measured against PostgreSQL, sharing the query took a 40-run fan-out from 128 ms to 5.4 ms, and keeping the answer bought a further 3.6 ms in exchange for invalidation, eviction, a generation fence and a standing question about staleness.
@@ -95,9 +97,13 @@ How the contract in `spec.md` is built. Every section cites the requirements it 
 
 **D-24** (R-TR-5) `RunConfig` carries only `tracing_disabled`. The run name and the caller's fields go to the observation this runtime opens, not to the SDK's trace, which may be exported elsewhere.
 
-**D-25** (R-TR-2) After instrumenting, the runtime checks the SDK's processor list and removes every processor that exports to the SDK vendor's backend, whether the instrumentation attached, failed, or was already present. Trusting `instrument()` was tried and failed: it reports a version mismatch by logging and returning, so its silence meant nothing.
+**D-25** (R-TR-2) After instrumenting, the runtime walks the SDK's processor list and removes each one whose `_exporter` is an instance of the SDK's `BackendSpanExporter` — its vendor backend, and nothing else. It does this whether the instrumentation attached, failed, or was already present. Trusting `instrument()` was tried and failed: it reports a version mismatch by logging and returning, so its silence meant nothing.
 
-**D-26** (R-TR-4) The factory writes what it resolved into the context's trace metadata, and it writes **after** the caller's own fields are copied in, so a request cannot change what the record says about the run. It can still add a field of its own beside them: there is no list of names the runtime owns — see `verification.md` F-7.
+**D-25a** (R-TR-2) Every other processor is left in place, including one the embedding application installed, which may export wherever that application chose. `test_another_librarys_processor_is_left_alone` holds this deliberately: the runtime removes the exporter it knows the SDK added, and does not audit its host's instrumentation.
+
+**D-26** (R-TR-4, R-TR-6) The runner copies the context's trace metadata, and the factory's `update()` lands **after** it, so the runtime's fields carry the runtime's answer whatever was supplied under those names. Anything else the embedding application put there travels beside them into the observation.
+
+**D-26a** The caller here is the embedding application, not an HTTP request: `AgentRunRequest` has no trace-metadata field, so nothing on the wire reaches this dict. Refusing a collision instead of overwriting it is `spec.md` P-3's sibling P-2, and is a proposal rather than a gap.
 
 ---
 
@@ -131,7 +137,19 @@ Every selection the code makes, and what else it matches.
 
 ## 10. Failure handling
 
-**D-27** (R-API-3) The HTTP layer maps each failure to what the caller can do about it: unknown agent or binding → 404; refused tool or unknown output schema → 403; bad input → 400; a prompt that cannot instruct → 500, because the definition is broken rather than the service; an unreachable provider → 502; deadline → 504; turn limit → 422.
+**D-27** (R-API-3) The HTTP layer maps **exception classes**, and each to what the caller can do about it:
+
+| Caught | Status |
+|---|---|
+| `RegistryError` — unknown agent or no binding | 404 |
+| `CapabilityError`, `OutputSchemaError` | 403 |
+| `PromptVariableError`, `RunInputError` | 400 |
+| `PromptShapeError` — the definition is broken, not the service | 500 |
+| `PromptError`, `ModelError` | 502 |
+| `TimeoutError` | 504 |
+| `MaxTurnsExceeded` | 422 |
+
+**D-27a** (R-API-3) The 502 row is the package's own `ModelError`. A failure raised by the provider client itself — `openai.APIConnectionError`, or an API status error — is caught by none of these and reaches the caller as 500. Measured through the real ASGI application with a stubbed runtime, no network contacted: `APIConnectionError` → 500, `ModelError` → 502. R-API-3 is therefore Partial; see `verification.md` F-8 and `spec.md` P-3.
 
 **D-28** (R-REG-8) Publication's three steps commit separately. A definition refused at publication leaves its draft; a failure at binding leaves a published version nothing runs. Neither is reachable by a request, and both are visible in `agent list`.
 
@@ -159,4 +177,4 @@ Unit tests for the registries, the schema and rendering; PostgreSQL tests agains
 2. **`get_active` does not filter on status.** Harmless while nothing archives; it would stop being harmless the moment something does.
 3. **An unset API key disables authentication** rather than refusing to serve. Failing closed outside `dev` was raised in review and has not been done.
 4. **No evaluation gate** between draft and published, which the guideline asks for.
-5. **A request can add fields to the trace record**, which R-TR-4 forbids. Either narrow the requirement to overwriting, or name the fields the runtime owns and refuse a collision.
+5. **The provider client's own exceptions are unmapped**, so an unreachable provider is 500 rather than 502 (F-8, P-3). The smallest of the open items to close.
