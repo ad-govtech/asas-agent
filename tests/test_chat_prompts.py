@@ -266,7 +266,8 @@ async def test_the_runtime_passes_request_variables_through_to_the_prompt(monkey
     assert run.call_args.args[0].instructions == "You score Delivery."
     assert run.call_args.kwargs["input"] == [{"role": "user", "content": "Profile: Ada"}]
 
-    # def test_a_run_with_nothing_to_say_is_refused():
+
+def test_a_run_with_nothing_to_say_is_refused():
     """With neither a question in the prompt nor one from the caller, there is nothing to answer."""
     with pytest.raises(RunInputError, match="needs a message to answer"):
         _run_input((), "")
