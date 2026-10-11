@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from asas_agent.integrations.prompts import FilePrompts, PromptError
+from asas_agent.integrations.prompts import FilePrompts, PromptError, PromptShapeError
 from asas_agent.registry.repository import AgentRepository, RegistryError
 from asas_agent.registry.schema import AgentConfig
 
@@ -67,6 +67,26 @@ async def test_repository_never_publishes_an_unresolved_prompt(tmp_path, draft_s
     with pytest.raises(PromptError, match="Cannot read"):
         await repository.publish(agent_key="advisor", version=1)
     assert session.execute.await_count == 1  # No UPDATE after failed resolution.
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        {"name": "advisor", "snapshot_messages": [{"role": "user", "content": "Hello"}]},
+        {
+            "name": "advisor",
+            "snapshot_messages": [{"role": "user", "content": "A"}, {"role": "system", "content": "B"}],
+        },
+        {"name": "advisor", "snapshot": ""},
+    ],
+)
+async def test_repository_refuses_a_carried_snapshot_that_cannot_run(prompt, draft_session):
+    row, session = draft_session
+    row.config = {**row.config, "prompt": prompt}
+    repository = AgentRepository(lambda: session)
+    with pytest.raises(PromptShapeError):
+        await repository.publish(agent_key="advisor", version=1)
+    assert session.execute.await_count == 1  # Refused at publication, not at the first run.
 
 
 @pytest.mark.parametrize("status", ["published", "archived"])

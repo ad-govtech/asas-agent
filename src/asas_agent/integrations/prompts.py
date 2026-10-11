@@ -283,7 +283,11 @@ async def pin_prompt(ref: PromptRef, provider: PromptProvider | None) -> PromptR
     request cannot be known at publication. The definition is immutable, so the
     variables it sets, and the names it lets a request fill, are frozen with it.
     """
-    if ref.snapshot is not None or ref.snapshot_messages is not None:
+    snapshot = _snapshot_template(ref)
+    if snapshot is not None:
+        # A definition can arrive carrying its snapshot - printed by `agent show`,
+        # copied from another registry - and is held to the same shape.
+        _split(snapshot, snapshot.messages)
         return ref.model_copy(deep=True)
     if provider is None:
         raise PromptError("A working prompt provider is required to publish an agent")
